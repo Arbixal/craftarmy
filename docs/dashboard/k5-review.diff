@@ -1,0 +1,651 @@
+# Primary actual K4a to K5 comparison; local checks recorded separately, no native performance claim.
+# CraftArmy/Core.lua baselineSHA256=68fa0719550f6befbf1f094966c5115d1425e1f9fdad1a30737bab67dfc7d441 targetSHA256=36c6a097973c3940e1300e0fbe377c3d141984cd3fbc92a49fa71ae2b7b5706e
+--- K4a/CraftArmy/Core.lua
++++ K5/CraftArmy/Core.lua
+@@ -26,8 +26,9 @@
+     return Core.Finite(n) and Core.Finite(lower) and n % 1 == 0 and n >= lower
+ end
+ 
+--- Copy only bounded finite, plain data. Never retain caller-owned tables.
+-function Core.Copy(value)
++-- Both modes walk every occurrence (including aliases), with ancestor-only seen.
++-- Check-only omits output allocations, never traversal or plain-data guards.
++local function boundedData(value, makeCopy)
+     local seen, count = {}, 0
+     local function copy(v, depth)
+         count = count + 1
+@@ -38,19 +39,28 @@
+         if kind == "string" and #v <= 4096 then return v end
+         if kind ~= "table" or getmetatable(v) or seen[v] then error("invalid/cyclic data") end
+         seen[v] = true
+-        local out = {}
++        local out = makeCopy and {} or nil
+         for k, x in pairs(v) do
+             if not ((type(k) == "string" and #k <= 128) or Core.Integer(k, 0)) then
+                 error("invalid key")
+             end
+-            out[k] = copy(x, depth + 1)
++            local child = copy(x, depth + 1)
++            if makeCopy then out[k] = child end
+         end
+         seen[v] = nil
+         return out
+     end
+     local ok, result = pcall(copy, value, 0)
+-    if ok then return result end
++    if ok then
++        if makeCopy then return result end
++        return true
++    end
+     return nil, tostring(result)
++end
++
++-- Copy only bounded finite, plain data. Never retain caller-owned tables.
++function Core.Copy(value)
++    return boundedData(value, true)
+ end
+ 
+ function Core.Observation(status, value, at, source, reason)
+@@ -92,19 +102,41 @@
+         Core.Integer(a.slot,1) and a.slot==b.slot and Core.Integer(a.itemID,1) and a.itemID==b.itemID and
+         type(a.link)=="string" and a.link:match("item:%d+:%d+:")~=nil and a.link==b.link
+ end
+-local function mergeEquipment(previous, observation, build, generation)
+-    if success[observation.status] then return Core.Merge(previous,observation,build,generation) end
++-- Apply-only: the full input pack and whole old character were cloned THIS call.
++-- No yield, external callback or real write occurs while these owned tables merge.
++-- Public ValidObservation/Merge deliberately retain their independent deep guards.
++local function validOwnedObservation(a)
++    if type(a)~="table" or not validAttempt(a) then return false end
++    if a.status == "observed" and a.value == nil then return false end
++    return true
++end
++local function mergeOwned(previous, observation, build, generation)
++    if not validOwnedObservation(observation) or not Core.Integer(generation, 1) or
++        type(build) ~= "string" or #build>4096 then return nil, "malformed observation" end
++    local out = previous or {}
++    out.attempt = {status=observation.status, attemptedAt=observation.attemptedAt,
++        source=observation.source, reason=observation.reason}
++    if success[observation.status] then
++        out.last = {status=observation.status, value=observation.value,
++            observedAt=observation.attemptedAt, build=build, generation=generation}
++    end
++    return out
++end
++
++local function mergeEquipment(previous, observation, build, generation, merge)
++    merge = merge or Core.Merge
++    if success[observation.status] then return merge(previous,observation,build,generation) end
+     local last=previous and previous.last
+     if last and sameInstance(last.value,observation.value) then
+         -- Whole unit and successful timestamp remain coherent; no subfield borrowing.
+-        return Core.Merge(previous,observation,build,generation)
++        return merge(previous,observation,build,generation)
+     end
+     -- A changed/removed/unidentifiable instance cannot inherit the prior metadata.
+     -- Keep only this scan's known existence/partial evidence, with a failed attempt.
+-    local out,why=Core.Merge(nil,observation,build,generation)
++    local out,why=merge(nil,observation,build,generation)
+     if not out then return nil,why end
+     if observation.value~=nil then
+-        local current=Core.Merge(nil,Core.Observation("observed",observation.value,
++        local current=merge(nil,Core.Observation("observed",observation.value,
+             observation.attemptedAt,observation.source),build,generation)
+         if not current then return nil,"Invalid current equipment unit" end
+         out.last=current.last
+@@ -457,7 +489,7 @@
+     if type(db) ~= "table" or getmetatable(db) or db.schema ~= 1 or type(db.characters) ~= "table" then
+         return nil, "Unsupported or invalid CraftArmyDB; writes disabled. Back up saved data."
+     end
+-    if not Core.Copy(db) then return nil, "Invalid saved data; writes disabled (no reset)." end
++    if not boundedData(db, false) then return nil, "Invalid saved data; writes disabled (no reset)." end
+     for guid, c in pairs(db.characters) do
+         if type(guid) ~= "string" or guid == "" or type(c) ~= "table" or
+             type(c.name) ~= "string" or type(c.realm) ~= "string" or
+@@ -515,7 +547,9 @@
+     if type(db) ~= "table" then return nil, "Open/validate saved data before applying a scan" end
+     local valid, reason = Core.Open(db)
+     if not valid then return nil, reason end
+-    if not Core.Copy({character, identity, observations}) then return nil, "Invalid scan data" end
++    local incoming = Core.Copy({character, identity, observations})
++    if not incoming then return nil, "Invalid scan data" end
++    character, identity, observations = incoming[1], incoming[2], incoming[3]
+     if type(character) ~= "table" or type(character.guid) ~= "string" or character.guid == "" or
+         type(character.name) ~= "string" or type(character.realm) ~= "string" or
+         type(identity) ~= "table" or type(observations) ~= "table" or not validIdentity(identity,identity.skillLineID) or
+@@ -531,16 +565,16 @@
+     if g and (g.identity.parentID ~= identity.parentID or g.identity.profession ~= identity.profession or
+         g.identity.expansionID ~= identity.expansionID) then return nil, "Profession identity changed" end
+     if not g then
+-        g = {generation=p.nextGeneration, identity=Core.Copy(identity), fields={}}
++        g = {generation=p.nextGeneration, identity=identity, fields={}}
+         p.nextGeneration = p.nextGeneration + 1
+     end
+-    g.identity = Core.Copy(identity)
++    g.identity = identity
+     for key, observation in pairs(observations) do
+-        if not Core.ValidObservation(observation) or not Core.ValidPayload(key,observation.value,observation.status) then
++        if not validOwnedObservation(observation) or not Core.ValidPayload(key,observation.value,observation.status) then
+             return nil,"Invalid production field payload: "..tostring(key)
+         end
+-        local merge=equipmentKey(key) and mergeEquipment or Core.Merge
+-        local field, why = merge(g.fields[key], observation, build, g.generation)
++        local merge=equipmentKey(key) and mergeEquipment or mergeOwned
++        local field, why = merge(g.fields[key], observation, build, g.generation, mergeOwned)
+         if not field then return nil, why end
+         g.fields[key] = field
+     end
+@@ -552,7 +586,7 @@
+     local proposal=candidateMirror(db)
+     if not proposal then return nil,"Bounded saved data mirror unavailable; scan not applied" end
+     proposal.characters[character.guid]=c
+-    if not Core.Copy(proposal) then return nil,"Assembled snapshot exceeds bounded saved data limits" end
++    if not boundedData(proposal, false) then return nil,"Assembled snapshot exceeds bounded saved data limits" end
+     db.characters[character.guid] = c
+     return g
+ end
+# CraftArmy/SelfTests.lua baselineSHA256=cf2e1e5bf4487283c4311a117e092703b20355eaf0bf91d17542402f1dfbc99c targetSHA256=c2d0b1f8cb27c92cc458272c209f363088aa8a59e964b9613acaed16932f23d3
+--- K4a/CraftArmy/SelfTests.lua
++++ K5/CraftArmy/SelfTests.lua
+@@ -3901,6 +3901,408 @@
+     end
+ end)
+ 
++-- K5 additions ONLY: all preceding 134 definitions/helpers remain byte-frozen.
++do
++local Core=C
++-- Exact pre-K5 Copy body, with only the declaration renamed; TEST-ONLY oracle.
++local function k5OldCopy(value)
++    local seen, count = {}, 0
++    local function copy(v, depth)
++        count = count + 1
++        if count > 50000 or depth > 20 then error("data traversal limit") end
++        local kind = type(v)
++        if kind == "nil" or kind == "boolean" then return v end
++        if kind == "number" and Core.Finite(v) then return v end
++        if kind == "string" and #v <= 4096 then return v end
++        if kind ~= "table" or getmetatable(v) or seen[v] then error("invalid/cyclic data") end
++        seen[v] = true
++        local out = {}
++        for k, x in pairs(v) do
++            if not ((type(k) == "string" and #k <= 128) or Core.Integer(k, 0)) then
++                error("invalid key")
++            end
++            out[k] = copy(x, depth + 1)
++        end
++        seen[v] = nil
++        return out
++    end
++    local ok, result = pcall(copy, value, 0)
++    if ok then return result end
++    return nil, tostring(result)
++end
++-- Exact pre-K5 gear algorithm, only declaration/callee names renamed. Its merge
++-- oracle is the unchanged PUBLIC Core.Merge, never the new private owned path.
++local function k5SameInstance(a,b)
++    return type(a)=="table" and type(b)=="table" and a.exists==true and b.exists==true and
++        Core.Integer(a.slot,1) and a.slot==b.slot and Core.Integer(a.itemID,1) and a.itemID==b.itemID and
++        type(a.link)=="string" and a.link:match("item:%d+:%d+:")~=nil and a.link==b.link
++end
++local k5Success={observed=true,empty=true,not_applicable=true}
++local function k5OldGear(previous, observation, build, generation)
++    if k5Success[observation.status] then return Core.Merge(previous,observation,build,generation) end
++    local last=previous and previous.last
++    if last and k5SameInstance(last.value,observation.value) then
++        -- Whole unit and successful timestamp remain coherent; no subfield borrowing.
++        return Core.Merge(previous,observation,build,generation)
++    end
++    -- A changed/removed/unidentifiable instance cannot inherit the prior metadata.
++    -- Keep only this scan's known existence/partial evidence, with a failed attempt.
++    local out,why=Core.Merge(nil,observation,build,generation)
++    if not out then return nil,why end
++    if observation.value~=nil then
++        local current=Core.Merge(nil,Core.Observation("observed",observation.value,
++            observation.attemptedAt,observation.source),build,generation)
++        if not current then return nil,"Invalid current equipment unit" end
++        out.last=current.last
++    end
++    return out
++end
++local function k5Parity(value,invalid)
++    local old,oldWhy=k5OldCopy(value)
++    local new,newWhy=C.Copy(value)
++    eq(type(new),type(old)); assert(deepEqual(new,old),"frozen Copy result parity")
++    if invalid then
++        eq(new,nil); assert(oldWhy:find(invalid,1,true)); assert(newWhy:find(invalid,1,true))
++    else eq(oldWhy,nil); eq(newWhy,nil) end
++    return new
++end
++local function k5Graph(value,invalid)
++    k5Parity(value,invalid)
++    local db={schema=1,characters={},extra=value}
++    local verify=unchangedGraph(db)
++    local old=k5OldCopy(db)
++    local opened=C.Open(db)
++    eq(opened~=nil,old~=nil,"Open vs frozen graph acceptance")
++    verify()
++end
++local function k5Fill(t,n,checkpoint)
++    for i=1,n do
++        t[i]=0
++        if i%1000==0 then pause(checkpoint,"K5 bounded fixture setup") end
++    end
++end
++local function k5WithCopy(replacement,fn)
++    local original=C.Copy
++    C.Copy=replacement
++    local ok,why=pcall(fn) -- NEVER checkpoint while this binding is installed.
++    C.Copy=original
++    assert(ok,why)
++end
++local function k5CountCopies(fn)
++    local original,calls=C.Copy,{}
++    k5WithCopy(function(value)
++        calls[#calls+1]=value
++        return original(value)
++    end,fn)
++    return calls
++end
++
++case("K5 frozen Copy oracle preserves public nil false zero alias expansion and isolation",function()
++    eq(k5Parity(nil),nil); eq(k5Parity(false),false); eq(k5Parity(0),0)
++    k5Parity(true); k5Parity(""); k5Parity(-3.5)
++    local shared={flag=false,zero=0,nested={label="owned"}}
++    local input={a=shared,b=shared,[0]="zero key",[2.5e1]="integer key"}
++    local copy=k5Parity(input)
++    assert(copy~=input and copy.a~=shared and copy.a~=copy.b and copy.a.nested~=copy.b.nested)
++    input.a.nested.label="caller"; eq(copy.a.nested.label,"owned")
++    copy.a.nested.label="candidate"; eq(copy.b.nested.label,"owned"); eq(shared.nested.label,"caller")
++end)
++
++case("K5 frozen graph oracle string key type metatable and cycle guards match check-only Open",function(checkpoint)
++    local variants={
++        {function() return string.rep("s",4096) end},
++        {function() return string.rep("s",4097) end,"invalid/cyclic data"},
++        {function() return {[string.rep("k",128)]=false} end},
++        {function() return {[string.rep("k",129)]=false} end,"invalid key"},
++        {function() return {[-1]=0} end,"invalid key"},
++        {function() return {[1.5]=0} end,"invalid key"},
++        {function() return {[true]=0} end,"invalid key"},
++        {function() return {[{}]=0} end,"invalid key"},
++        {function() return {[math.huge]=0} end,"invalid key"},
++        {function() return function() end end,"invalid/cyclic data"},
++        {function() return coroutine.create(function() end) end,"invalid/cyclic data"},
++        {function() return setmetatable({},{}) end,"invalid/cyclic data"},
++        {function() return setmetatable({},{__metatable="locked"}) end,"invalid/cyclic data"},
++        {function() return setmetatable({},{__metatable=false}) end}, -- frozen truthiness semantics
++        {function() local t={}; t.self=t; return t end,"invalid/cyclic data"},
++        {function() local a,b={},{}; a.b=b; b.a=a; return a end,"invalid/cyclic data"},
++    }
++    for _,variant in ipairs(variants) do
++        pause(checkpoint,"K5 graph guard variant")
++        k5Graph(variant[1](),variant[2])
++    end
++end)
++
++case("K5 actual native nonfinite samples reject Copy Open and owned incoming without mutation",function(checkpoint)
++    for _,sample in ipairs(nonfiniteSamples()) do
++        pause(checkpoint,"K5 actual nonfinite variant")
++        k5Parity(sample.value,"invalid/cyclic data")
++        local db={schema=1,characters={},extra=sample.value}; local characters=db.characters
++        local text=tostring(db.extra); eq(C.Open(db),nil); eq(db.characters,characters); eq(tostring(db.extra),text)
++        local clean=C.Open(nil); local verify=unchangedGraph(clean)
++        local obs={unspent=C.Observation("observed",sample.value,20,"fixture")}
++        local observation=obs.unspent
++        eq(C.Apply(clean,character,identity,obs,20,"fixture"),nil); verify()
++        eq(obs.unspent,observation); eq(tostring(observation.value),text)
++    end
++end)
++
++case("K5 frozen walker exact50000 and50001 visits agree with Copy and check-only Open",function(checkpoint)
++    local db={schema=1,characters={},padding={}}
++    k5Fill(db.padding,49996,checkpoint) -- root + schema + characters + padding = 4
++    eq(k2ValueCount(db),50000); pause(checkpoint,"K5 exact count")
++    assert(k5OldCopy(db)); pause(checkpoint,"K5 exact old Copy")
++    assert(C.Copy(db)); pause(checkpoint,"K5 exact public Copy")
++    eq(C.Open(db),db); pause(checkpoint,"K5 exact check-only Open")
++    db.padding[49997]=0
++    local old,why=k5OldCopy(db); eq(old,nil); assert(why:find("data traversal limit",1,true))
++    pause(checkpoint,"K5 excess old Copy")
++    local new,why=C.Copy(db); eq(new,nil); assert(why:find("data traversal limit",1,true))
++    pause(checkpoint,"K5 excess public Copy")
++    eq(C.Open(db),nil); eq(#db.padding,49997)
++end)
++
++case("K5 frozen walker counts repeated aliases per occurrence at50000 and50001",function(checkpoint)
++    local shared={}; k5Fill(shared,12000,checkpoint)
++    local db={schema=1,characters={},a=shared,b=shared,padding={}}
++    k5Fill(db.padding,25994,checkpoint) -- 6 + 2*12000 + 25994
++    eq(k2ValueCount(db),50000); pause(checkpoint,"K5 expanded alias count")
++    local old=k5OldCopy(db); assert(old); assert(old.a~=old.b)
++    pause(checkpoint,"K5 expanded alias old Copy")
++    local new=C.Copy(db); assert(new); assert(new.a~=new.b and new.a~=shared)
++    pause(checkpoint,"K5 expanded alias public Copy")
++    eq(C.Open(db),db); pause(checkpoint,"K5 expanded alias Open")
++    db.padding[25995]=0
++    eq(k5OldCopy(db),nil); pause(checkpoint,"K5 expanded alias excess oracle")
++    eq(C.Copy(db),nil); pause(checkpoint,"K5 expanded alias excess Copy")
++    eq(C.Open(db),nil); eq(db.a,shared); eq(db.b,shared)
++end)
++
++case("K5 frozen walker depth20 fits and21 fails in public and check-only modes",function()
++    local extra=0
++    for _=1,19 do extra={extra} end
++    local db={schema=1,characters={},extra=extra}
++    assert(k5OldCopy(db)); assert(C.Copy(db)); eq(C.Open(db),db)
++    db.extra={extra}
++    k5Parity(db,"data traversal limit"); eq(C.Open(db),nil); eq(db.extra[1],extra)
++end)
++
++case("K5 Open needs no discarded Copy output but still rejects graph typed and archive damage",function()
++    local db=dbWith({unspent=0}); local verify=unchangedGraph(db)
++    local original=C.Copy
++    k5WithCopy(function() error("discarded Copy must not be called",0) end,function()
++        eq(C.Open(db),db); verify()
++        db.extra={}; db.extra.loop=db.extra; eq(C.Open(db),nil); db.extra=nil
++        local g=db.characters[character.guid].professions[2913].active
++        g.fields.unspent.last.value=false; eq(C.Open(db),nil); g.fields.unspent.last.value=0
++        local p=db.characters[character.guid].professions[2913]
++        local archives=p.archives
++        p.archives={g}; eq(C.Open(db),nil); p.archives=archives
++        eq(C.Open(db),db); verify()
++    end)
++    eq(C.Copy,original)
++    local ok=pcall(function()
++        k5WithCopy(function() error("trap",0) end,function() error("intentional finally exercise",0) end)
++    end)
++    eq(ok,false); eq(C.Copy,original); eq(C.Open(db),db)
++end)
++
++case("K5 small Apply retains exactly inputpack and whole oldcharacter clones not per-field copies",function(checkpoint)
++    local values=payloadFixtures()
++    for _,count in ipairs({1,6}) do
++        for _,existing in ipairs({false,true}) do
++            pause(checkpoint,"K5 clone-count setup")
++            local db=existing and dbWith(values) or C.Open(nil)
++            local old=db.characters[character.guid]
++            local observations={}
++            for i,key in ipairs({"unspent","skill","moxie","tool","slots","environment"}) do
++                if i<=count then observations[key]=C.Observation("observed",values[key],20,"fixture") end
++            end
++            local g
++            local calls=k5CountCopies(function() g=assert(C.Apply(db,character,identity,observations,20,"fixture")) end)
++            eq(#calls,existing and 2 or 1,"constant ownership clones")
++            eq(calls[1][1],character); eq(calls[1][2],identity); eq(calls[1][3],observations)
++            if existing then eq(calls[2],old) end
++            assert(g.identity~=identity); eq(C.Open(db),db)
++        end
++    end
++end)
++
++case("K5 whole candidate input identity observation archive and otherprofession ownership is bidirectional",function(checkpoint)
++    local db,archivedReturned=dbWith(payloadFixtures())
++    assert(C.Archive(db,character.guid,2913,15,"fixture"))
++    pause(checkpoint,"K5 ownership archive")
++    local oldg=assert(C.Apply(db,character,identity,{unspent=C.Observation("observed",8,20,"fixture")},20,"fixture"))
++    local old=db.characters[character.guid]
++    old.userMetadata={nested={note="old"}}
++    old.professions[2914]={nextGeneration=1,archives={},note={text="other profession"}}
++    db.savedCharacter=old
++    local ch=C.Copy(character); ch.extra={note="character input"}
++    local id=C.Copy(identity); id.extra={note="identity input"}
++    local obs={skill=C.Observation("observed",payloadFixtures().skill,30,"fixture")}
++    local oldVerify,inputVerify=unchangedGraph(old),unchangedGraph({ch,id,obs})
++    pause(checkpoint,"K5 ownership inputs ready")
++    local g=assert(C.Apply(db,ch,id,obs,30,"new-build"))
++    oldVerify(); inputVerify(); eq(db.savedCharacter,old)
++    local candidate=db.characters[character.guid]; local p=candidate.professions[2913]
++    assert(candidate~=old and g~=oldg and g.identity~=id and p.archives~=old.professions[2913].archives)
++    assert(p.archives[1]~=old.professions[2913].archives[1])
++    assert(candidate.professions[2914]~=old.professions[2914])
++    ch.name="caller"; id.name="caller"; id.extra.note="caller"
++    obs.skill.value.skillLevel=99; obs.skill.status="error"; obs.skill.attemptedAt=99
++    oldg.fields.unspent.last.value=9
++    old.userMetadata.nested.note="caller"; old.professions[2914].note.text="caller"
++    old.professions[2913].archives[1].fields.unspent.last.value=7
++    archivedReturned.fields.unspent.last.value=6
++    eq(candidate.name,"Fixture"); eq(g.identity.name,"Inscription"); eq(g.identity.extra.note,"identity input")
++    eq(g.fields.skill.last.value.skillLevel,0); eq(g.fields.unspent.last.value,8)
++    eq(g.fields.skill.attempt.status,"observed"); eq(g.fields.skill.attempt.attemptedAt,30)
++    eq(candidate.userMetadata.nested.note,"old"); eq(candidate.professions[2914].note.text,"other profession")
++    eq(p.archives[1].fields.unspent.last.value,0)
++    g.identity.extra.note="candidate"; g.fields.skill.last.value.skillLevel=22
++    g.fields.skill.attempt.status="unknown"; g.fields.skill.attempt.attemptedAt=31
++    g.fields.unspent.last.value=3; candidate.userMetadata.nested.note="candidate"
++    candidate.professions[2914].note.text="candidate"; p.archives[1].fields.unspent.last.value=2
++    eq(id.extra.note,"caller"); eq(obs.skill.value.skillLevel,99); eq(oldg.fields.unspent.last.value,9)
++    eq(obs.skill.status,"error"); eq(obs.skill.attemptedAt,99)
++    eq(old.userMetadata.nested.note,"caller"); eq(old.professions[2914].note.text,"caller")
++    eq(old.professions[2913].archives[1].fields.unspent.last.value,7)
++    eq(C.Open(db),db)
++end)
++
++case("K5 cross-input and cross-field aliases expand independently including retained prior fields",function()
++    local shared={version="fixture",locale="fixture",skillLevel=0,maxSkillLevel=100,skillModifier=0,nested={flag=false}}
++    local observation=C.Observation("observed",shared,20,"fixture")
++    local id=C.Copy(identity); id.extra=shared
++    local db=C.Open(nil)
++    local g=assert(C.Apply(db,character,id,{skill=observation,environment=observation},20,"fixture"))
++    local a,b=g.fields.skill.last.value,g.fields.environment.last.value
++    assert(a~=b and a~=shared and a.nested~=b.nested and g.identity.extra~=a and g.identity.extra~=b)
++    a.nested.flag=true; eq(b.nested.flag,false); eq(shared.nested.flag,false); eq(g.identity.extra.nested.flag,false)
++    -- Legal old DB aliases must ALSO expand in the retained whole-character clone.
++    g.fields.environment=g.fields.skill
++    local old=g.fields.skill
++    local nextg=assert(C.Apply(db,character,identity,{},30,"fixture"))
++    assert(nextg.fields.skill~=nextg.fields.environment and nextg.fields.skill~=old)
++    nextg.fields.skill.last.value.nested.flag=false
++    eq(nextg.fields.environment.last.value.nested.flag,true); eq(old.last.value.nested.flag,true)
++end)
++
++case("K5 owned scalar merge parity with unchanged public Merge for every status zero nil and stale",function(checkpoint)
++    for _,status in ipairs({"observed","empty","not_applicable","unknown","unsupported","error"}) do
++        for _,hasValue in ipairs({false,true}) do
++            for _,hasPrevious in ipairs({false,true}) do
++                pause(checkpoint,"K5 scalar Merge oracle variant")
++                local db,g=dbWith(hasPrevious and {unspent=8} or {})
++                local obs=C.Observation(status,hasValue and 0 or nil,30,"fixture","reason")
++                local verify=unchangedGraph({g,obs})
++                local expected=C.Merge(g.fields.unspent,obs,"new-build",g.generation)
++                local result=C.Apply(db,character,identity,{unspent=obs},30,"new-build")
++                verify()
++                if expected then
++                    assert(result); assert(deepEqual(result.fields.unspent,expected))
++                else eq(result,nil) end
++            end
++        end
++    end
++    -- Generic public false/nil behavior remains independent of typed Apply rules.
++    local observed=C.Merge(nil,C.Observation("observed",false,1,"fixture"),"fixture",1)
++    eq(observed.last.value,false)
++    local retained=C.Merge(observed,C.Observation("unknown",nil,2,"fixture"),"fixture",1)
++    eq(retained.last.value,false); eq(retained.last.observedAt,1); eq(retained.attempt.attemptedAt,2)
++end)
++
++case("K5 every gear status same changed removed unidentified and nil branch matches frozen gear Merge oracle",function(checkpoint)
++    for _,key in ipairs({"tool","accessory1","accessory2","slot33"}) do
++        for _,status in ipairs({"observed","empty","not_applicable","unknown","unsupported","error"}) do
++            for _,mode in ipairs({"same","changed ID","changed link","unidentified","removed","nil"}) do
++                for _,hasPrevious in ipairs({false,true}) do
++                pause(checkpoint,"K5 gear Merge oracle variant")
++                local value=C.Copy(payloadFixtures().tool)
++                value.slot=key=="slot33" and 33 or 20; value.role=key
++                if key=="slot33" then value.role=nil end
++                local db,g=dbWith(hasPrevious and {[key]=value} or {}); local previous=g.fields[key]
++                local incoming=C.Copy(value); incoming.stats=nil; incoming.rarity=nil; incoming.rank=nil
++                incoming.metadataReady=false
++                if mode=="changed ID" then incoming.itemID=90021; incoming.link="item:90021:0:0"
++                elseif mode=="changed link" then incoming.link="item:90020:1:0"
++                elseif mode=="unidentified" then incoming.itemID=nil; incoming.link=nil
++                elseif mode=="removed" then incoming={slot=value.slot,role=value.role,exists=false,metadataReady=false}
++                elseif mode=="nil" then incoming=nil end
++                local obs=C.Observation(status,incoming,30,"fixture","pending")
++                local verify=unchangedGraph({previous,obs})
++                local expected=k5OldGear(previous,obs,"new-build",1)
++                local result=C.Apply(db,character,identity,{[key]=obs},30,"new-build")
++                verify()
++                if status=="observed" and incoming==nil then eq(result,nil)
++                else assert(result); assert(deepEqual(result.fields[key],expected),key.." / "..status.." / "..mode) end
++                end
++            end
++        end
++    end
++end)
++
++case("K5 malformed owned input shape identity generation build and typed guards reject graph-identically",function(checkpoint)
++    local mutations={
++        function(p) p[1].guid="" end,
++        function(p) p[1].name=true end,
++        function(p) p[2].expansionID=0 end,
++        function(p) p[2].name=false end,
++        function(p) p[2].parentID=774 end,
++        function(p) p[3].unspent.status="bad" end,
++        function(p) p[3].unspent.attemptedAt=-1 end,
++        function(p) p[3].unspent.source=false end,
++        function(p) p[3].unspent.reason={} end,
++        function(p) p[3].unspent.value=nil end,
++        function(p) p[3].unspent.value=false end,
++        function(p) p[3].unspent.value=function() end end,
++        function(p) p[3].unspent.loop=p[3].unspent end,
++        function(p) setmetatable(p[3].unspent,{}) end,
++        function(p) p[4]=-1 end,
++        function(p) p[5]=false end,
++        function(p) p[5]=string.rep("b",4097) end,
++        function(_,db) db.characters[character.guid].professions[2913].nextGeneration=1 end,
++        function(_,db) db.characters[character.guid].professions[2913].active.generation=0 end,
++        function(_,db) db.characters[character.guid].professions[2913].active.fields.unspent.last.value=false end,
++    }
++    for _,mutate in ipairs(mutations) do
++        pause(checkpoint,"K5 atomic invalid variant")
++        local db=dbWith({unspent=8})
++        local input={C.Copy(character),C.Copy(identity),{unspent=C.Observation("observed",0,30,"fixture")},30,"fixture"}
++        mutate(input,db)
++        local verify=unchangedGraph({db,input})
++        eq(C.Apply(db,input[1],input[2],input[3],input[4],input[5]),nil); verify()
++    end
++end)
++
++case("K5 owned candidate still enforces native scope after individually typed raw payload passes",function()
++    local raw={policy="native-rank-reconciled-v1",identity=C.Copy(identity),nativeComplete=false,tabsComplete=false,tabs={}}
++    eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++    local foreign=C.Copy(identity); foreign.skillLineID=2914
++    local db=C.Open(nil); local obs={knowledgeRaw=C.Observation("observed",raw,30,"fixture")}
++    local verify=unchangedGraph({db,obs,foreign})
++    local result,why=C.Apply(db,character,foreign,obs,30,"fixture")
++    eq(result,nil); eq(why,"Invalid candidate generation/scope"); verify()
++end)
++
++case("K5 Archive retains actual generation Copy and relearn reload isolates old returned generations",function(checkpoint)
++    local db,g=dbWith({unspent=0,slots={indices={20},complete=false}})
++    local calls=k5CountCopies(function() assert(C.Archive(db,character.guid,2913,20,"fixture")) end)
++    eq(#calls,1); eq(calls[1],g)
++    local archive=db.characters[character.guid].professions[2913].archives[1]
++    assert(archive~=g and archive.fields~=g.fields)
++    g.fields.unspent.last.value=9; eq(archive.fields.unspent.last.value,0)
++    archive.fields.slots.last.value.indices[1]=21; eq(g.fields.slots.last.value.indices[1],20)
++    eq(C.Open(db),db); pause(checkpoint,"K5 archived reload")
++    local nextg=assert(C.Apply(db,character,identity,{},30,"fixture"))
++    eq(nextg.generation,2); eq(next(nextg.fields),nil)
++    local retained=db.characters[character.guid].professions[2913].archives[1]
++    assert(retained~=archive); archive.fields.unspent.last.value=7; eq(retained.fields.unspent.last.value,0)
++    retained.fields.slots.last.value.complete=true; eq(archive.fields.slots.last.value.complete,false)
++    eq(C.Open(db),db)
++end)
++end
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# docs/dashboard/README.md baselineSHA256=285f82caf06afcd977818f339519d405a1479abf49545548a2f2d8eb5ef20d77 targetSHA256=02978f8d198599d1419636c07e1d5c220cc0368bd211a4018da8857dabced1c0
+--- K4a/docs/dashboard/README.md
++++ K5/docs/dashboard/README.md
+@@ -1,14 +1,15 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** latest user run stopped **INCOMPLETE,50 passed/0 failed
+-of134**, case51 grouped protected capture/format unit102.7ms (wall8668.2ms), exceeding
+-the unchanged100ms limit.84 cases remain uncompleted;51 started and81 was NOT REACHED:
+-Scan stages are **NOT MEASURED**. K4a splits only case51's completed protected groups
+-with safe outer pauses; it awaits independent review. K4 measurement was reviewed;
+-neither delivery is a production fix or native performance PASS. Original Capture
+-still formats internally and remains atomic; individual-operation durations unknown.
+-**Do not rerun unchanged K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++**Current selftest paused:** latest user run stopped **INCOMPLETE,81 passed/0 failed
++of134**, case81 final Scan unit147.2ms (wall79956.2ms), exceeding the unchanged100ms
++limit.53 cases remain uncompleted. Measured inner Scan T147.1ms; exclusive O28.4,
++A37.3,C70.8,K4.1,E6.1,G0.1,B0.1,R0.2ms. Snapshot validation/copying dominates this
++probe-inclusive injected fixture, not pure Blizzard API latency. Warnings and game
++interactivity were not reported. K5 removes discarded clone allocations and reuses
++only private already-validated Apply clones; all graph/typed/scope/atomic guards stay.
++**K5 awaits independent review and new native validation; no latency PASS is claimed.**
++**Do not rerun unchanged K4a/K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
+ Historical K3f81/123 stopped at final second-Scan/assert unit122.4ms (wall67041.5ms),
+ with42 uncompleted; it did not measure internal Scan stages either.
+ Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
+@@ -52,7 +53,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K4a review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K5 review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -141,7 +142,7 @@
+ ```
+ 
+ Python checks do not parse or execute Lua. Installed Lua5.1.5 now executes both full
+-suites; see evidence for actual K4a134/134 and23/23 results. These isolated fixtures
++suites; see evidence for actual K5 **149/149** and **23/23** results. These isolated fixtures
+ do not establish WoW APIs, native100ms performance, warnings or interactivity.
+ 
+ ### R4 update and retest (user only, after independent review)
+@@ -175,7 +176,46 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K4a case51 grouping and K4 stage measurement (current; user only AFTER independent review)
++### K5 Core allocation correction (current; user only AFTER independent review)
++
++K5 changes **only Core.lua and SelfTests.lua** in the installed addon. It uses one
++identical bounded graph walk in copy/check-only modes: check-only removes output
++allocations, not visits or guards. Apply retains full Open, the full incoming-pack
++clone and whole old-character clone, then privately reuses owned fields/values.
++Public Copy/ValidObservation/Merge semantics, all typed validators, alias-expanded
++assembled budget and the single DB commit remain. No trusted public bypass, cache,
++async scan, schema/mapping/accounting-policy change or new dependency is introduced.
++All original134 cases, stress work, runner/K4 instrumentation and case81 are byte-
++unchanged;15 isolated guard/ownership/oracle regressions append: **149 definitions**.
++Local Lua5.1 passed all149 with0 failures/no INCOMPLETE and diagnostics23/23; this
++does not prove client latency or APIs. New tests add no duplicate heavy35-path Scan.
++
++1. **Wait for primary's independent K5 review and coordination.** Fully quit WoW and
++   back up `WTF`, including production and diagnostic SavedVariables. Already on K4a:
++   replace **only `CraftArmy/Core.lua` and `CraftArmy/SelfTests.lua`** with the reviewed
++   K5 files. Keep ALL other modules, `CraftArmyDB`, SavedVariables and diagnostics
++   unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset/profiling changes.
++2. Login/reload and explicitly run **`/ca selftest` out of combat**. STARTED reports
++   actual count (currently149). Preserve every case/order/workload and the unchanged
++   **100ms/10000-step** limits. No filtering/skipping/reordering/limit raises or
++   automatic resume. Cancellation remains `/ca selftest cancel`.
++3. Share case81's **PASS line containing `scan2`**, or final **INCOMPLETE summary with
++   the scan2-tagged case/unit identity** if slow-stopped. If stopped before81's final
++   step, Scan stages are **NOT MEASURED**, not zero. Share final COMPLETE/INCOMPLETE
++   counts, wall/max-unit timing, case/unit/label, all failures, warning recurrence and
++   whether the game remained interactive. Compare **total T against147.1ms** and the
++   outer **unit against147.2ms**, not C alone. Check-only work is now charged within
++   O/A rather than nested C, so a falling Copy bucket alone proves no improvement.
++4. Report a new stop once; **no unchanged-version rerun**, skip or raised limit.
++   Keep native bars/hover/unspent comparisons paused until primary records satisfactory
++   **safe full completion/performance plus warning/interactivity evidence**.
++
++The unchanged K4 note uses probe-inclusive inner Scan T and exclusive stage totals
++as explained below. Wrapper/assertion/runner overhead is outside T but inside the
++outer unit. Neither standalone fixtures nor category reassignment establishes an
++uninstrumented production latency claim or a hard <100ms guarantee.
++
++### K4a case51 grouping and K4 stage measurement (historical instructions)
+ 
+ This changes **only SelfTests.lua**, not Core/Collectors/Knowledge/KnowledgeCheck,
+ Commands, snapshot policy, limits or saved data. All123 old ordered cases/assertions,

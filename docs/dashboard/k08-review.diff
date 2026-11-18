@@ -1,0 +1,302 @@
+--- before/CraftArmy/Commands.lua
++++ after/CraftArmy/Commands.lua
+@@ -57,6 +57,7 @@
+         return value
+     end
+     local function startSelftest()
++        if self.knowledgeCapture then pcall(printLine,"Selftest not started: knowledgecapture running; cancel it first."); return end
+         if self.selftest then
+             local s=self.selftest
+             if not safeCombat() then finish(s,"combat/unknown safety; no automatic resume"); return end
+@@ -127,6 +128,173 @@
+         end
+         return s.runner
+     end
++    -- Separate ephemeral evidence scheduler. Never borrow runtime Context/Roster or DB:
++    -- only a new collector's Context/Same may inspect the current native attribution.
++    local function captureContext(ctx)
++        if type(ctx)~="table" or type(ctx.identity)~="table" or type(ctx.character)~="table" then return false end
++        local i=ctx.identity
++        local m=NS.Data.expansions[i.skillLineID]
++        return m and NS.Data.families[i.profession] and i.parentID==m.parentID and
++            i.profession==m.profession and i.expansionID==11 and m.expansionID==11 and
++            NS.Core.Integer(ctx.config,1) and ctx.config<=2147483647 and
++            NS.Core.Integer(ctx.sourceCounter,0) and ctx.sourceCounter<=2147483647 and ctx.staged==false and
++            type(ctx.character.guid)=="string" and ctx.character.guid~="" and
++            type(ctx.character.name)=="string" and type(ctx.character.realm)=="string"
++    end
++    local function captureGuard(s)
++        if self.knowledgeCapture~=s or not safeCombat() then return false end
++        local r=self.collector
++        if r~=s.runtime or r.revision~=s.revision or r.serial~=s.serial or r.scheduled or r.deferred then return false end
++        local ctx=s.guard:Context()
++        return captureContext(ctx) and s.guard:Same(s.context,ctx)==true and
++            ctx.character.name==s.context.character.name and ctx.character.realm==s.context.character.realm
++    end
++    local function captureClock(s)
++        local value=s.clock()
++        if not NS.Core.Finite(value) or value<s.lastTime or not NS.Core.Finite(value-s.started) then error("invalid capture clock",0) end
++        s.lastTime=value; s.elapsed=value-s.started
++        return value
++    end
++    local function stopCapture(s,reason)
++        if self.knowledgeCapture~=s then return end
++        self.knowledgeCapture=nil -- retire FIRST: even throwing cleanup leaves stale callbacks inert
++        self.knowledgeCaptureFrame=nil
++        if s.dispose then pcall(s.dispose); s.dispose=nil end
++        if s.frame then
++            pcall(function() s.frame:SetScript("OnUpdate",nil) end)
++            pcall(function() s.frame:Hide() end)
++        end
++        s.frame=nil; s.runtime=nil; s.guard=nil; s.context=nil; s.clock=nil
++        s.status=reason and "incomplete" or "complete"; s.completed=not reason
++        s.reason=reason; s.phase=s.status
++        self.knowledgeCaptureSummary={status=s.status,completed=s.completed,reason=reason,
++            callbacks=s.callbacks,elapsed=s.elapsed,maxCallback=s.maxCallback,captureComplete=s.captureComplete==true}
++        if reason then pcall(printLine,"Knowledgecapture INCOMPLETE: "..reason.."; no automatic resume; previous success retained, not current.") end
++    end
++    local function captureStatus()
++        local s=self.knowledgeCapture or self.knowledgeCaptureSummary
++        if not s then pcall(printLine,"No knowledgecapture running or completed this session."); return end
++        if self.knowledgeCapture then
++            local ok,valid=pcall(captureGuard,s)
++            if not ok or not valid then stopCapture(s,"status guard failed (payload omitted)"); return end
++        end
++        local ok=pcall(printLine,"Knowledgecapture "..(self.knowledgeCapture and "RUNNING" or s.status)..
++            "; callbacks="..tostring(s.callbacks).."; phase="..tostring(s.phase or s.status)..
++            "; captureComplete="..tostring(s.captureComplete==true).."; evidence only, all-rank costs unverified.")
++        if not ok and self.knowledgeCapture then stopCapture(self.knowledgeCapture,"status callback failure (payload omitted)") end
++        return self.knowledgeCapture
++    end
++    local function startCapture()
++        if self.knowledgeCapture then return captureStatus() end
++        if self.selftest then pcall(printLine,"Knowledgecapture not started: selftest running; cancel it first."); return end
++        local s={callbacks=0,elapsed=0,maxCallback=0,phase="capture",status="running",completed=false}
++        -- Pending outputs/jobs are closure-private; dispose clears them even when a
++        -- native frame retains a stale callback after failed SetScript cleanup.
++        local job,report,text,summary,attempt
++        local armed=false -- even reentrant native setup cannot Step on the slash stack
++        s.dispose=function()
++            local old=job; job=nil; report=nil; text=nil; summary=nil
++            if attempt then pcall(function() attempt.frame:Hide() end); attempt=nil end
++            if old then pcall(function() old:Cancel("driver retired") end) end
++        end
++        local setup=pcall(function()
++            assert(safeCombat(),"unsafe")
++            local r=self.collector
++            assert(type(r)=="table" and getmetatable(r)==nil and NS.Core.Integer(r.revision,0) and
++                r.revision<=2147483647 and NS.Core.Integer(r.serial,0) and r.serial<=2147483647 and
++                not r.scheduled and not r.deferred,"runtime unavailable or pending")
++            assert(type(env.CreateFrame)=="function","Frame missing")
++            if type(env.debugprofilestop)=="function" then s.clock=env.debugprofilestop
++            elseif type(env.GetTimePreciseSec)=="function" then s.clock=function()
++                local value=env.GetTimePreciseSec()
++                assert(NS.Core.Finite(value),"seconds clock invalid"); return value*1000
++            end end
++            assert(s.clock,"clock missing")
++            s.started=s.clock(); assert(NS.Core.Finite(s.started),"clock invalid"); s.lastTime=s.started
++            s.runtime=r; s.revision=r.revision; s.serial=r.serial
++            s.guard=NS.Collectors.New(env,nil); s.context=s.guard:Context()
++            assert(captureContext(s.context),"context unavailable")
++            self.knowledgeCapture=s
++            assert(captureGuard(s),"context changed")
++            -- Requirements have passed: hide stale success even if later factory or
++            -- native driver setup fails. Successful fields themselves remain intact.
++            if self.knowledgeCaptureWindow then self.knowledgeCaptureWindow.frame:Hide() end
++            job=NS.KnowledgeCheck.NewProfessionCaptureJob(env,r)
++            assert(type(job)=="table" and job.status=="running" and type(job.Step)=="function" and type(job.Cancel)=="function","factory failure")
++            s.frame=env.CreateFrame("Frame")
++            assert(s.frame and type(s.frame.SetScript)=="function" and type(s.frame.Hide)=="function" and type(s.frame.Show)=="function","Frame capability")
++            self.knowledgeCaptureFrame=s.frame
++            s.frame:SetScript("OnUpdate",function()
++                if not armed or self.knowledgeCapture~=s then return end
++                local worked=pcall(function()
++                    local before=captureClock(s)
++                    assert(captureGuard(s),"guard failed")
++                    if s.callbacks>=10000 then stopCapture(s,"10000 callback limit reached"); return end
++                    s.callbacks=s.callbacks+1
++                    local publish=s.phase=="publish"
++                    if publish then
++                        -- This separate callback closes the completed-format -> UI gap.
++                        local window=NS.KnowledgeCheck.Show(env,text,self.knowledgeCaptureWindow)
++                        if self.knowledgeCapture~=s then
++                            if window then pcall(function() window.frame:Hide() end) end
++                            return
++                        end
++                        attempt=window
++                        assert(window,"UI failure")
++                        assert(captureGuard(s),"publication guard failed")
++                        printLine("Knowledgecapture publication; captureComplete="..tostring(summary.captureComplete==true)..
++                            "; evidence only / provisional; all-rank costs unverified; no snapshot writes.")
++                    else
++                        job:Step() -- exactly ONE capture OR format unit per callback
++                        assert(captureGuard(s),"post-Step guard failed")
++                        if job.status=="complete" and job.completed==true then
++                            if s.phase=="capture" then
++                                report=job.report
++                                job=NS.KnowledgeCheck.NewFormatJob(report)
++                                assert(type(job)=="table" and job.status=="running" and type(job.Step)=="function" and type(job.Cancel)=="function","format factory failure")
++                                s.phase="format" -- no format Step in this callback
++                            else
++                                text=job.text; summary=job.summary
++                                assert(type(text)=="string" and type(summary)=="table","invalid format output")
++                                job=nil; s.phase="publish" -- publication only next frame
++                            end
++                        elseif job.status~="running" then error("job incomplete",0) end
++                    end
++                    assert(captureGuard(s),"final guard failed")
++                    local duration=captureClock(s)-before
++                    assert(NS.Core.Finite(duration),"duration invalid")
++                    -- The clock itself can fail/reenter event processing. Never
++                    -- publish disposed locals or overwrite old success after retirement.
++                    assert(self.knowledgeCapture==s and self.collector==s.runtime and
++                        s.runtime.revision==s.revision and s.runtime.serial==s.serial and
++                        not s.runtime.scheduled and not s.runtime.deferred,"post-clock runtime guard failed")
++                    s.maxCallback=math.max(s.maxCallback,duration)
++                    if duration>100 then stopCapture(s,"slow callback >100ms (post-return detection, not preemption)"); return end
++                    if publish then
++                        self.knowledgeCaptureReport=report; self.knowledgeCaptureText=text; self.knowledgeCaptureWindow=attempt
++                        s.captureComplete=summary.captureComplete==true
++                        attempt=nil -- successful window survives disposal
++                        stopCapture(s)
++                        pcall(printLine,"Knowledgecapture scheduler COMPLETE (data completeness is separate; all-rank costs unverified).")
++                    elseif s.callbacks>=10000 then stopCapture(s,"10000 callback limit reached") end
++                end)
++                if not worked then stopCapture(s,"guard/job/clock/UI/callback failure (payload omitted)") end
++            end)
++            assert(captureGuard(s),"setup guard failed")
++            s.frame:Show()
++            printLine("Knowledgecapture STARTED: one unit/frame; /ca knowledgecapture status | cancel; >100ms post-return stop, 10000 callbacks; evidence only.")
++        end)
++        if not setup then
++            if self.knowledgeCapture==s then stopCapture(s,"start/setup failure (payload omitted); require idle runtime, own ready unstaged profession, safe clock/Frame")
++            else
++                pcall(s.dispose); s.dispose=nil; s.runtime=nil; s.guard=nil; s.context=nil; s.clock=nil
++                self.knowledgeCaptureSummary={status="incomplete",completed=false,reason="start requirements unavailable (payload omitted)",callbacks=0,captureComplete=false}
++                pcall(printLine,"Knowledgecapture not started: idle existing collector, own ready unstaged crafting profession, safe combat/clock/Frame required; wait/retry manually.")
++            end
++        end
++        armed=setup and self.knowledgeCapture==s
++        return self.knowledgeCapture
++    end
+     function self:Login()
+         if self.collector then return end
+         local db,why=NS.Core.Open(env.CraftArmyDB)
+@@ -141,6 +309,17 @@
+         local action=(message or ""):match("^%s*selftest%s*(.-)%s*$")
+         -- Match the command token, not prefixes such as selftesting.
+         local token=(message or ""):match("^%s*(%S+)")
++        if token=="knowledgecapture" then
++            local arg=(message or ""):match("^%s*knowledgecapture%s*(.-)%s*$")
++            if arg=="" then return startCapture() end
++            if arg=="status" then return captureStatus() end
++            if arg=="cancel" then
++                if self.knowledgeCapture then stopCapture(self.knowledgeCapture,"cancelled by user")
++                else pcall(printLine,"No knowledgecapture running.") end
++                return
++            end
++            pcall(printLine,"Usage: /ca knowledgecapture | /ca knowledgecapture status | /ca knowledgecapture cancel"); return
++        end
+         if token=="selftest" then
+             if action=="" then return startSelftest() end
+             if action=="cancel" then
+@@ -152,6 +331,7 @@
+         end
+         local command=(message or ""):match("^%s*(%S*)%s*$")
+         if command=="knowledgecheck" then
++            if self.knowledgeCapture then pcall(printLine,"Knowledgecheck not started: knowledgecapture running; cancel it first."); return end
+             local combat=NS.Collectors.Call(env,"InCombatLockdown")
+             if combat~=false then
+                 printLine("Combat/unknown safety: no knowledge capture or window; run /ca knowledgecheck again out of combat.")
+@@ -167,13 +347,15 @@
+             if why then printLine(why) end
+             return report,text,why
+         end
++        if command=="scan" and self.knowledgeCapture then stopCapture(self.knowledgeCapture,"explicit scan requested") end
+         self:Login()
+         if command=="" then self.dashboard:Toggle()
+         elseif command=="scan" then
+             local _,why=self.collector:Scan(); printLine(why or self.collector.reason)
+-        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (frame-stepped isolated fixtures, out of combat); /ca selftest cancel; /ca knowledgecheck (read-only provisional Inscription evidence, out of combat).") end
++        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (frame-stepped isolated fixtures, out of combat); /ca selftest cancel; /ca knowledgecheck (read-only provisional Inscription evidence, out of combat); /ca knowledgecapture [status|cancel] (frame-stepped read-only crafting evidence).") end
+     end
+     function self:Event(event,...)
++        if self.knowledgeCapture then stopCapture(self.knowledgeCapture,"event received; retry manually after normal processing settles") end
+         if event=="PLAYER_REGEN_DISABLED" and self.selftest then finish(self.selftest,"entered combat; no automatic resume") end
+         if event=="PLAYER_LOGIN" then self:Login(); self.collector:Request("Login: open your own profession to refresh"); return end
+         if not self.collector then return end
+--- before/CraftArmy/KnowledgeCheck.lua
++++ after/CraftArmy/KnowledgeCheck.lua
+@@ -203,7 +203,15 @@
+     end
+     return out
+ end
+-local function validContext(ctx)
++local PROFESSION_MODE={}
++local function validContext(ctx,mode)
++    if mode==PROFESSION_MODE then
++        if not ctx or not integer(ctx.config,1) or not integer(ctx.sourceCounter) or not plain(ctx.identity) then return false end
++        local i=ctx.identity
++        local map=NS.Data.expansions[i.skillLineID]
++        return map~=nil and NS.Data.families[i.profession]~=nil and i.parentID==map.parentID and
++            i.profession==map.profession and i.expansionID==11 and map.expansionID==11
++    end
+     return ctx and integer(ctx.config,1) and integer(ctx.sourceCounter) and ctx.identity.skillLineID==2913 and
+         ctx.identity.parentID==773 and ctx.identity.profession==13 and ctx.identity.expansionID==11
+ end
+@@ -214,15 +222,15 @@
+         discovered=0,captured=0,reconciliation={status="unknown",reason="capture incomplete"},allRankCosts="unverified"}
+ end
+ -- unit returns to the outer Step, never through any of the per-API pcalls.
+-local function capture(env,runtime,r,unit)
++local function capture(env,runtime,r,unit,mode)
+     if not plain(runtime) or not integer(runtime.revision) or not integer(runtime.serial) then r.reason="Existing runtime collector token unavailable"; unit("metadata","runtime unavailable"); return end
+     r.runtimeStart={status="observed",revision=runtime.revision,serial=runtime.serial}
+     local localCollector=Collectors.New(env,nil)
+     local start=localCollector:Context() -- The only reused collector operation, with Same below.
+     r.start=boundary(env,start)
+-    if not validContext(start) then
++    if not validContext(start,mode) then
+         r.runtimeEnd={status="observed",revision=integer(runtime.revision) and runtime.revision or nil,serial=integer(runtime.serial) and runtime.serial or nil}
+-        r.reason="Own ready Midnight Inscription context/config/sourceCounter unavailable"; unit("metadata","context unavailable"); return
++        r.reason=mode==PROFESSION_MODE and "Own ready Midnight crafting context/config/sourceCounter unavailable" or "Own ready Midnight Inscription context/config/sourceCounter unavailable"; unit("metadata","context unavailable"); return
+     end
+     r.timeStart=scalar(env,"GetServerTime",0)
+     local locale,ls=read(env,"GetLocale"); r.locale={status=ls,value=clean(locale,32)}
+@@ -301,7 +309,7 @@
+     local finish=localCollector:Context()
+     r.finish=boundary(env,finish); r.timeEnd=scalar(env,"GetServerTime",0)
+     r.runtimeEnd={status="observed",revision=integer(runtime.revision) and runtime.revision or nil,serial=integer(runtime.serial) and runtime.serial or nil}
+-    r.stable=validContext(finish) and localCollector:Same(start,finish)==true and
++    r.stable=validContext(finish,mode) and localCollector:Same(start,finish)==true and
+         r.runtimeStart.revision==r.runtimeEnd.revision and r.runtimeStart.serial==r.runtimeEnd.serial and
+         start.staged==false and finish.staged==false and value(r.start.stagingRead)==false and value(r.finish.stagingRead)==false or false
+     r.captureComplete=complete and r.stable and good(r.timeEnd)
+@@ -480,12 +488,12 @@
+     return job
+ end
+ local function unit(phase,label,paths,attempts) coroutine.yield(UNIT_TOKEN,phase,label,paths,attempts) end
+-function Check.NewCaptureJob(env,runtime,options)
++local function newCaptureJob(env,runtime,options,mode)
+     local job=newJob("capture",options)
+     if job.status~="running" then return job end
+     job.worker=coroutine.create(function()
+         local r=blank()
+-        capture(env,runtime,r,unit)
++        capture(env,runtime,r,unit,mode)
+         local _,summary=format(r,unit)
+         if summary.outputTruncated then
+             r.outputTruncated=true; r.captureComplete=false; r.candidate=nil; r.shared=nil
+@@ -495,6 +503,12 @@
+         return r
+     end)
+     return job
++end
++function Check.NewCaptureJob(env,runtime,options)
++    return newCaptureJob(env,runtime,options)
++end
++function Check.NewProfessionCaptureJob(env,runtime,options)
++    return newCaptureJob(env,runtime,options,PROFESSION_MODE)
+ end
+ -- Caller-owned immutable borrowed input until terminal. Never Core.Copy this graph:
+ -- a full read-only report can legitimately exceed the snapshot copy budget.

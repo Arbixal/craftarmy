@@ -1,0 +1,377 @@
+# Primary actual K6 to K7 comparison; local checks recorded separately, no native performance claim.
+# CraftArmy/Core.lua baselineSHA256=50105139dfe727aee52c2f3108a16041a9f2f0928e687a25867a9e13a780b001 targetSHA256=cfb993b10e64ed9561d6cecfefbd2b5354e0d32c1c683ce79d4a469a4990607b
+--- K6/CraftArmy/Core.lua
++++ K7/CraftArmy/Core.lua
+@@ -49,6 +49,42 @@
+         return finite(n,keyFailure) and finite(0,keyFailure) and n % 1 == 0 and n >= 0
+     end
+     return finite, integer, function() return pending end
++end
++
++-- Rejection-only lower bound: one plain table plus 50000 own children cannot fit
++-- the existing 50000-visit walk. Sparse length is ONLY a hint to count raw keys.
++-- Every miss/cap defers to the full walker; search dedup never changes its counts.
++-- Multiply-invalid graphs may now report budget before type/native/cycle errors.
++local function provesOverBudget(value)
++    local visited, tables, edges, probes, exhausted = {}, 0, 0, 0, false
++    local function search(v, depth)
++        if type(v)~="table" or getmetatable(v)~=nil or visited[v] then return false end
++        if tables>=64 then exhausted=true; return false end
++        visited[v]=true; tables=tables+1
++        if #v>=50000 then
++            local key, own=nil,0
++            while probes<50001 do
++                key=next(v,key); probes=probes+1
++                if key==nil then break end
++                own=own+1
++                if own>=50000 then return true end
++            end
++            if probes>=50001 then exhausted=true; return false end
++        end
++        -- A container at depth4 can prove rejection, but cannot extend the search.
++        if depth>=4 then return false end
++        local key, child
++        while edges<256 do
++            key,child=next(v,key)
++            if key==nil then return false end
++            edges=edges+1
++            if search(child,depth+1) then return true end
++            if exhausted then return false end
++        end
++        exhausted=true
++        return false
++    end
++    return search(value,0)
+ end
+ 
+ -- Both modes walk every occurrence (including aliases), with ancestor-only seen.
+@@ -76,7 +112,11 @@
+         seen[v] = nil
+         return out
+     end
+-    local ok, result = pcall(copy, value, 0)
++    local function root(v)
++        if provesOverBudget(v) then error("data traversal limit") end
++        return copy(v,0)
++    end
++    local ok, result = pcall(root, value)
+     if ok then
+         if makeCopy then return result end
+         return true
+# tests/dashboard.lua baselineSHA256=c6f2349120d5794ba7b4e8ed1e9c8bc68289a5f8c23f88bdcdd708072618de35 targetSHA256=1a3585d83cb61171b0346bfa55319ce9fa1e8f3aea35275f3dae11ea351a8fa8
+--- K6/tests/dashboard.lua
++++ K7/tests/dashboard.lua
+@@ -315,3 +315,215 @@
+ end
+ check(math==hostMath and rawget(math,"isfinite")==hostNative,"real host math/native never changed")
+ print("K6 isolated supplement: "..supplementChecks.." checks; 0 failed (standalone fake predicates, not native performance/API evidence)")
++
++-- Standalone-only K7 supplement, appended AFTER the entire frozen K6 runner.
++-- No addon namespace, host math, clock or public probe hook is modified.
++do
++    local checks=0
++    local function test(ok,why)
++        assert(ok,"K7 supplement: "..why); checks=checks+1
++    end
++    local function snapshot(root)
++        local records={}
++        local function visit(v)
++            if type(v)~="table" or records[v] then return end
++            local record={meta=getmetatable(v),entries={}}; records[v]=record
++            for k,x in next,v do record.entries[k]=x; visit(k); visit(x) end
++        end
++        visit(root)
++        return function()
++            for t,r in pairs(records) do
++                local same=getmetatable(t)==r.meta
++                for k,v in next,r.entries do same=same and rawget(t,k)==v end
++                for k in next,t do same=same and rawget(r.entries,k)~=nil end
++                test(same,"all input entries/references/metatables unchanged")
++            end
++        end
++    end
++    local function array(n)
++        local t={}; for i=1,n do t[i]=0 end; return t
++    end
++    local function own(t)
++        local n=0; for _ in next,t do n=n+1 end; return n
++    end
++    local function chain(t,n)
++        for _=1,n do t={t} end; return t
++    end
++    local function holey()
++        local t=array(50000)
++        for i=1,32000 do t[i]=nil end
++        test(#t>=50000 and own(t)==18000,"sparse high border is only a hint, 18000 actual entries")
++        return t
++    end
++    -- Trace ONLY fresh isolated Core's raw next calls. The old full walker uses
++    -- pairs; no production predicate/clock or current149 namespace is replaced.
++    local function fresh()
++        local C,e,c,reset=isolated()
++        local trace={calls=0,hinted=0,tables={}}
++        e.next=function(t,k)
++            trace.calls=trace.calls+1; trace.tables[t]=true
++            if getmetatable(t)==nil and #t>=50000 then trace.hinted=trace.hinted+1 end
++            return next(t,k)
++        end
++        return C,e,c,reset,trace
++    end
++    local function compare(name,input,expected,setup,traceCheck)
++        local C,e,c,reset,trace=fresh()
++        local oracle=oldWalker(C,e)
++        local verify=snapshot(input)
++        reset(); (setup or standard)(C,e,c)
++        local value,why=C.Copy(input)
++        local args=c.args
++        test(c.pcalls==1,name.." one outer protected call")
++        verify()
++        if traceCheck then traceCheck(trace) end
++        reset(); (setup or standard)(C,e,c)
++        local old,oldWhy=oracle(input)
++        test(equal(value,old) and class(why)==class(oldWhy),name.." frozen oracle values/error class")
++        test(class(why)==expected,name.." expected acceptance/rejection")
++        test(equal(args,c.args),name.." every native argument/order/count retained")
++        test(not why or not why:find(PRIVATE,1,true),name.." private native payload omitted")
++        if expected then test(value==nil and old==nil,name.." no partial output")
++        elseif type(input)=="table" then test(value~=input and old~=input,name.." fresh owned output") end
++        verify()
++        return value
++    end
++    local function proof(name,input,oldClass)
++        local C,e,c,_,trace=fresh(); install(e,c,ieee)
++        local verify=snapshot(input)
++        local value,why=C.Copy(input)
++        test(value==nil and class(why)=="data traversal limit",name.." necessary reject/no partial output")
++        test(#c.args==0 and c.pcalls==1,name.." proof needs no native calls, existing outer pcall only")
++        test(trace.hinted==50000,name.." exactly 50000 confirmed own keys suffice")
++        local old,oldWhy=oldWalker(C,e)(input)
++        test(old==nil and class(oldWhy)==oldClass,name.." frozen old oracle also rejects")
++        test(#c.args>0,name.." old oracle performed native prefix guards")
++        test(not why:find(PRIVATE,1,true),name.." no native payload")
++        verify()
++    end
++
++    local big=array(50001)
++    test(own(big)==50001,"same full oversized payload constructed, not reduced")
++    proof("50001 own children",big,"data traversal limit")
++    proof("50000 own children",array(50000),"data traversal limit")
++    compare("49999 children exact50000 visits",array(49999),nil)
++    proof("reachable depth4",chain(big,4),"data traversal limit")
++    compare("depth5 misses then full rejection",chain(big,5),"data traversal limit",nil,function(t)
++        test(t.hinted==0,"depth5 not probed; depth4 checked before stopping descent")
++    end)
++    compare("sparse root high hint valid",holey(),nil,nil,function(t)
++        test(t.hinted==18001+256,"sparse root counted to nil then bounded discovery")
++    end)
++    compare("two depth4 sparse hinted containers valid",chain({holey(),holey()},3),nil,nil,function(t)
++        test(t.hinted==36002,"global probe count covers both hinted containers")
++    end)
++    compare("global50001 candidate cap falls back",chain({holey(),holey(),holey()},3),"data traversal limit",nil,function(t)
++        test(t.hinted==50001,"global candidate probes capped across multiple holey containers")
++        test(t.calls==50007,"candidate cap stops search immediately after six discovery entries")
++    end)
++    local sharedHoley=holey()
++    compare("hinted alias search dedup still full expanded reject",chain({sharedHoley,sharedHoley,sharedHoley},3),"data traversal limit",nil,function(t)
++        test(t.hinted==18001,"search counts aliased hinted container only once")
++    end)
++    compare("discovery256 valid fallback",array(300),nil,nil,function(t)
++        test(t.calls==256,"exact256 raw discovery entries cap")
++    end)
++    local badEdges={}; for i=1,300 do badEdges[i]=string.rep("x",4097) end
++    compare("discovery cap never accepts invalid",badEdges,"invalid/cyclic data")
++    local tables={}; for i=1,70 do tables[i]={} end
++    local function tableCap(t)
++        test(own(t.tables)==64,"at most64 distinct tables searched")
++        test(t.calls==127,"root64 discovery entries plus63 empty tables; then stop")
++    end
++    compare("table64 valid fallback",tables,nil,nil,tableCap)
++    local badTables={}; for i=1,70 do badTables[i]={bad=function() end} end
++    compare("table cap never accepts invalid",badTables,"invalid/cyclic data",nil,function(t)
++        test(own(t.tables)==64,"invalid graph still stops search at64 tables")
++    end)
++    local shared=array(25000)
++    local aliases=compare("alias expanded global limit",{shared,shared},"data traversal limit")
++    test(aliases==nil,"search dedup is not validation dedup")
++    local small={n=7}
++    local expanded=compare("valid repeated aliases",{small,small},nil)
++    test(expanded[1]~=expanded[2] and expanded[1]~=small,"full copy expands aliases independently")
++    local cycle={7}; cycle[2]=cycle
++    compare("cycle defers to ancestor guard",cycle,"invalid/cyclic data")
++    local metamethods=0
++    local function trap() metamethods=metamethods+1; error("K7_METAMETHOD_MUST_NOT_RUN") end
++    for _,lock in ipairs({"locked",false}) do
++        local t=setmetatable(array(50000),{__metatable=lock,__len=trap,__pairs=trap,__index=trap})
++        -- The old guard treats a false lock as falsy (Lua5.1 pairs is raw).
++        compare("metatable deferral "..tostring(lock),t,lock==false and "data traversal limit" or "invalid/cyclic data",nil,function(trace)
++            test(trace.calls==0,"ANY metatable, including false, skips entire search")
++        end)
++    end
++    compare("plain metatable deferral",setmetatable({7},{__len=trap,__pairs=trap,__index=trap}),"invalid/cyclic data")
++    test(metamethods==0,"no user length/pairs/index metamethod calls")
++    compare("unproven native throw",{7},"invalid key",behavior(function() error(PRIVATE) end))
++
++    -- Deliberate error-priority difference: both paths reject multiply-invalid
++    -- overbudget data. Do NOT assert false exact error/native-argument parity.
++    local dual=array(50000)
++    for i=1,50000 do dual[i]=function() end end
++    proof("type-invalid and guaranteed overbudget",dual,"invalid/cyclic data")
++    local dualCycle=array(50000)
++    for i=1,50000 do dualCycle[i]=dualCycle end
++    proof("cyclic and guaranteed overbudget",dualCycle,"invalid/cyclic data")
++    do
++        local C,e,c=fresh()
++        install(e,c,function() error(PRIVATE) end)
++        local value,why=C.Copy(big)
++        test(value==nil and class(why)=="data traversal limit" and #c.args==0,"proof precedes otherwise-throwing native")
++        local old,oldWhy=oldWalker(C,e)(big)
++        test(old==nil and class(oldWhy)=="invalid key" and not oldWhy:find(PRIVATE,1,true),"native-fault old oracle also fails closed/sanitized")
++    end
++
++    do
++        local C,e,c=fresh(); install(e,c,ieee)
++        local character={guid="k7",name="Fixture",realm="Test"}
++        local identity={skillLineID=2913,parentID=773,profession=13,expansionID=11}
++        local balance={id=3261,quantity=4}
++        local observations={unspent=C.Observation("observed",4,100,"fixture"),
++            moxie=C.Observation("observed",balance,100,"fixture")}
++        local db={schema=1,characters={}}
++        local g=C.Apply(db,character,identity,observations,100,"test")
++        test(g~=nil and C.Open(db)==db,"real valid Apply/Open still accepted")
++        test(db.characters.k7~=character and g.identity~=identity and g.fields.unspent.last.value==4,"Apply owns identity/character/values")
++        test(g.fields.moxie.last.value~=balance and g.fields.moxie.last.value.quantity==4,"Apply owns nested typed value")
++        identity.name="caller changed"; observations.unspent.value=9
++        balance.quantity=9
++        test(g.identity.name==nil and g.fields.unspent.last.value==4 and g.fields.moxie.last.value.quantity==4,"caller mutation does not reach committed DB")
++        local chars,oldCharacter,oldActive=db.characters,db.characters.k7,g
++        local oversized={unspent=C.Observation("observed",big,101,"fixture")}
++        local verify=snapshot({db,character,identity,oversized})
++        c.args={}
++        local applied,reason=C.Apply(db,character,identity,oversized,101,"test")
++        test(applied==nil and reason=="Invalid scan data","real Apply same50001 payload fails incoming copy")
++        test(#c.args>0,"Apply still fully validates existing DB before incoming proof")
++        test(db.characters==chars and db.characters.k7==oldCharacter and oldCharacter.professions[2913].active==oldActive,"oversized Apply no commit/reference changes")
++        verify()
++        local malformed={schema=2,characters={}}
++        local badChars=malformed.characters
++        local verifyBad=snapshot(malformed)
++        applied,reason=C.Apply(malformed,character,identity,oversized,101,"test")
++        test(applied==nil and reason=="Unsupported or invalid CraftArmyDB; writes disabled. Back up saved data.","malformed DB reason precedes oversized incoming proof")
++        test(malformed.characters==badChars and next(badChars)==nil,"malformed DB not committed")
++        verifyBad()
++        local nativeDB={schema=1,characters={},sentinel=123456789}
++        local nativeChars=nativeDB.characters
++        local verifyNative=snapshot(nativeDB)
++        install(e,c,function(n) if n==123456789 then error(PRIVATE) end return ieee(n) end)
++        applied,reason=C.Apply(nativeDB,character,identity,oversized,101,"test")
++        test(applied==nil and reason=="Invalid saved data; writes disabled (no reset)." and not reason:find(PRIVATE,1,true),"DB native fault priority/sanitization precedes incoming proof")
++        test(nativeDB.characters==nativeChars and next(nativeChars)==nil,"native DB fault no commit")
++        verifyNative()
++        local hugeDB={schema=1,characters={},extra=big}
++        local hugeChars=hugeDB.characters
++        local opened,openReason=C.Open(hugeDB)
++        test(opened==nil and openReason=="Invalid saved data; writes disabled (no reset).","real Open oversized graph no partial output")
++        test(hugeDB.characters==hugeChars and hugeDB.extra==big and own(big)==50001,"Open preserves oversized DB input")
++    end
++    test(supplementChecks==744,"entire K6 supplement count remains744")
++    test(math==hostMath and rawget(math,"isfinite")==hostNative,"host math/native field untouched")
++    print("K7 conservative proof supplement: "..checks.." checks; 0 failed (standalone soundness, not native performance/API evidence)")
++end
+# docs/dashboard/README.md baselineSHA256=84ee999e6b6838866514244f4075f7685f334d7a61e5f8065bd35c6432455d5b targetSHA256=df5979a1c3300060d022f320c2e1b2daef712501b4804d2c0a6fd7b992f7a071
+--- K6/docs/dashboard/README.md
++++ K7/docs/dashboard/README.md
+@@ -1,16 +1,16 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** latest K5 user run stopped **INCOMPLETE,81 passed/0 failed
+-of149**, case81 final Scan unit103.0ms (wall73689.9ms), exceeding the unchanged100ms
+-limit.68 cases remain uncompleted. Measured inner Scan T102.8ms; exclusive O36.5,
+-A37.1,C18.2,K4.2,E6.3,G0.2,B0.1,R0.2ms. T improved44.3ms (~30.1%) from147.1ms,
+-but safe full completion remains unproven. These are probe-inclusive injected fixture
+-measurements, not pure Blizzard API latency. Warnings/interactivity remain unknown.
+-K6 removes only nested native-guard pcalls inside two already-protected graph walks;
+-every numeric check, literal-zero bound, native call/order and public guard remains.
+-**K6 awaits independent review and new native validation; no latency PASS is claimed.**
+-**Do not rerun unchanged K5/K4a/K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++**Current selftest paused:** latest K6 user run stopped **INCOMPLETE,86 passed/0 failed
++of149**, case87 unit2 [oversized Apply]123.4ms (wall86561.3ms).63 cases remain
++uncompleted (87 started). Case81 now passes under the unchanged100ms limit, but its
++new scan2 T was not provided; no new stage/speedup numbers are inferred. Warning
++recurrence/interactivity remain unknown. Safe full completion is still unproven.
++K7 adds a private conservative rejection proof for a reachable plain table with
++at least50000 confirmed own entries, not a sparse-length assumption. Every unproven
++input still runs the entire old validator, with every numeric guard/order unchanged.
++**K7 awaits independent review and native validation; no latency PASS is claimed.**
++**Do not rerun unchanged K6/K5/K4a/K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
+ Historical K3f81/123 stopped at final second-Scan/assert unit122.4ms (wall67041.5ms),
+ with42 uncompleted; it did not measure internal Scan stages either.
+ Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
+@@ -54,7 +54,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K6 review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K7 review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -143,8 +143,8 @@
+ ```
+ 
+ Python checks do not parse or execute Lua. Installed Lua5.1.5 now executes both full
+-suites; see evidence for actual K6 **149/149**, **744 separate isolated supplement checks**,
+-and **23/23** results. The supplement loads fresh Core chunks with copied math tables
++suites; see evidence for actual **149/149**, **744 separate K6 checks**, the separate
++K7 soundness-check count, and **23/23** results. Supplements load fresh Core chunks with copied math tables
+ and fake predicates, never patches host math, and reports separately from149 cases.
+ These isolated fixtures
+ do not establish WoW APIs, native100ms performance, warnings or interactivity.
+@@ -180,7 +180,46 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K6 protected numeric dispatch (current; user only AFTER independent review)
++### K7 conservative budget proof (current; user only AFTER independent review)
++
++K7 changes **only Core.lua** in the installed addon. One table plus50000 own child
++values necessarily exceeds the existing50000-visit budget. A private root-only
++search uses plain-table length >=50000 ONLY as a hint, then counts raw own keys.
++Depth4(root0),64 distinct tables,256 discovery entries and50001 GLOBAL candidate
++probes are opportunistic search caps, not new persistence bounds. A miss/cap always
++runs the complete old copy/validator. Metatables (including false locks) are deferred
++without invoking metamethods; search dedup never changes alias-expanded validation.
++The recursive copy, public guards, typed validation, initial Apply DB validation,
++alias-safe final proposal and single real commit are unchanged. Multiply-invalid
++overbudget graphs may report budget before type/native/cycle errors; both old and
++new paths reject, with no partial result. No formerly valid graph is rejected.
++
++All **149 SelfTests.lua cases, full50001-element construction, real Apply and later
++failed-evidence Scan, K4 timing, checkpoints and assertions remain byte-unchanged**.
++Standalone-only K7 tests append after the entire unchanged K6 runner/supplement.
++Local correctness tests do not establish native speed, APIs or warning resolution.
++
++1. **Wait for primary's independent K7 review and coordination.** Fully quit WoW,
++   back up `WTF` including production and diagnostic SavedVariables. Already on K6:
++   replace **only `CraftArmy/Core.lua`** with the reviewed K7 file. Keep current
++   **SelfTests.lua149**, ALL other modules, `CraftArmyDB`, SavedVariables and
++   diagnostics unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset.
++2. Login/reload and explicitly run **`/ca selftest` out of combat**. Preserve149 cases,
++   order/workloads and unchanged **100ms/10000-step** limits. No skipping/filtering/
++   reordering/limit raises or automatic resume; `/ca selftest cancel` remains available.
++3. Share final COMPLETE/INCOMPLETE counts, wall/max-unit timing, case/unit/label,
++   failures, warning recurrence and whether the game stayed interactive. If available,
++   also share case81's **PASS scan2 line** to record its new T (latest86-case summary
++   did not provide it). Prior Scan T102.8/unit103.0 and initial147.1/147.2ms are history,
++   not current values. Case87's123.4ms is the Apply unit, not a Scan-stage measurement.
++4. Report a new stop once; **no unchanged-version rerun** or raised limits. Keep native
++   bars/hover/unspent comparisons paused until primary records satisfactory **safe
++   full completion/performance and warning/interactivity evidence**.
++
++No native<100ms guarantee, extra heavy Scan for latency, host clock/math patch,
++profiler reset, CVar/error-handler change or agent live-game action is included.
++
++### K6 protected numeric dispatch (historical instructions)
+ 
+ K6 changes **only Core.lua** in the installed addon. The existing whole-walk pcall
+ in boundedData and candidateMirror now protects each native finite call directly,

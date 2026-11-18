@@ -1,0 +1,390 @@
+# Primary exact pre-U04 to delivered U04 comparison; no Git/staged scope.
+# CraftArmy/Dashboard.lua baseSHA256=b25e4a0f4a584926f2c9822a70be0da289661b3575cbf61a49a0f64adfcb0f3b targetSHA256=ac1d33dd8cfeddc83cac42b834b742dfb80c3eb9e6d178dbfa7b97d354ed92cd
+--- pre-U04/CraftArmy/Dashboard.lua
++++ U04/CraftArmy/Dashboard.lua
+@@ -2,7 +2,7 @@
+ local Dashboard, V, C, D = {}, NS.ViewModel, NS.Core, NS.Data
+ NS.Dashboard = Dashboard
+ local I=V.index
+-local widths={110,100,150,64,44,44,44,180,130,96,56,232,74,100}
++local widths={110,100,150,64,44,44,44,140,110,96,56,292,74,100}
+ local G={margin=15,screenMargin=30,rowHeight=22,pageRows=12,baseHeight=194,
+     headerTop=96,headerHeight=18,viewportTop=118,toolbarTop=60}
+ G.contentWidth=0
+@@ -302,10 +302,10 @@
+             w.bars={}
+             for n=1,8 do
+                 local b=env.CreateFrame("StatusBar",nil,w.cells[I.Knowledge])
+-                b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+-                b:SetStatusBarColor(0.2,0.65,0.95); b:SetMinMaxValues(0,1); b:SetSize(53,14)
++                b:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
++                b:SetStatusBarColor(0.2,0.65,0.95); b:SetMinMaxValues(0,1); b:SetSize(widths[I.Knowledge]-6,14)
+                 b.background=b:CreateTexture(nil,"BACKGROUND"); b.background:SetAllPoints(); b.background:SetColorTexture(0.15,0.15,0.15,1)
+-                b.label=text(b,53); b.label:SetAllPoints(); b.label:SetJustifyH("CENTER")
++                b.label=text(b,widths[I.Knowledge]-6); b.label:SetAllPoints(); b.label:SetJustifyH("CENTER")
+                 b:EnableMouse(true)
+                 b:SetScript("OnEnter",function(widget)
+                     if b.tree then focusedTooltip(widget,b.tree.summaryTooltip,b.tree.tooltip,nil,nil,true) end
+@@ -362,11 +362,11 @@
+                 for n,b in ipairs(w.bars) do
+                     local t=r.trees[n]; b.tree=t
+                     if t then
+-                        local width=math.min(53,(widths[I.Knowledge]-4)/math.max(1,#r.trees)-2)
++                        local width=(widths[I.Knowledge]-4)/math.max(1,#r.trees)-2
+                         b:ClearAllPoints(); b:SetPoint("LEFT",(n-1)*(width+2),0); b:SetWidth(width)
+                         b.label:SetWidth(width)
+                         b:SetValue(t.ratio or 0); b:GetStatusBarTexture():SetShown(t.ratio~=nil)
+-                        b.label:SetText((t.shortName or "")..":"..(t.purchased and (t.purchased.."/"..t.capacity) or "?")); b:Show()
++                        b.label:SetText(t.purchased and (t.purchased.."/"..t.capacity) or "?"); b:Show()
+                     else b:Hide() end
+                 end
+             else w:Hide() end
+# CraftArmy/ViewModel.lua baseSHA256=19d1860789752ac0a2c4c7b301a06fc51c047701907005dcd2735d2aada5a47f targetSHA256=f4a329cb91598aed71945acd73a55db5aa7951c3af02f6a6b7bbbcdff3ddcaf2
+--- pre-U04/CraftArmy/ViewModel.lua
++++ U04/CraftArmy/ViewModel.lua
+@@ -216,12 +216,12 @@
+             if seen[id] or depth>64 or #lines>=64 then return end
+             seen[id]=true
+             local p=byID[id]
+-            if not p then missing=true; lines[#lines+1]="Unknown branch: ?/?"; return end
++            if not p then missing=true; lines[#lines+1]=string.rep("  ",depth).."Unknown branch: ?/?"; return end
+             local name=type(p.name)=="string" and #p.name<=256 and p.name:match("%S") and
+                 not p.name:find("[%c|]") and p.name or "Unknown branch"
+             local points=known and C.Integer(p.purchased) and C.Integer(p.capacity) and
+                 (p.purchased.."/"..p.capacity) or "?/?"
+-            lines[#lines+1]=name..": "..points
++            lines[#lines+1]=string.rep("  ",depth)..name..": "..points
+             for _,child in ipairs(p.children or {}) do visit(child,depth+1) end
+         end
+         visit(value.root,0)
+# CraftArmy/SelfTests.lua baseSHA256=e62a18fc14d0e4c9b02e5a0db3991ec1bc58548fec5fd1b62b0ea1877c59e7c6 targetSHA256=ad193897185f4cb626cf1026450f952f701a806e22edfb037ea014342858edf5
+--- pre-U04/CraftArmy/SelfTests.lua
++++ U04/CraftArmy/SelfTests.lua
+@@ -1252,7 +1252,7 @@
+     assert(a.y>=b.y+b.h-0.000001,"overlapping vertical bands: "..context)
+ end
+ case("R5 geometry 0 1 2 12 13 many rows has exact compact bounds and canonical hover headers",function(checkpoint)
+-    local expected={110,100,150,64,44,44,44,180,130,96,56,232,74,100}
++    local expected={110,100,150,64,44,44,44,140,110,96,56,292,74,100}
+     for _,count in ipairs({0,1,2,12,13,37}) do
+         pause(checkpoint,"R5 geometry variant")
+         local ui,env=dashboardRows(count,checkpoint)
+@@ -4527,7 +4527,12 @@
+         excludes(normal,"Main branch:"); excludes(normal,"Shift-hover")
+         local paths=c.db.characters[character.guid].professions[2913].active.fields["tree:"..tree.id].last.value.paths
+         eq(#env.GameTooltip.lines,#paths)
+-        for i,p in ipairs(paths) do eq(env.GameTooltip.lines[i],"Unknown branch: "..p.purchased.."/"..p.capacity) end
++        local depths={[paths[1].id]=0}
++        for i,p in ipairs(paths) do
++            local depth=assert(depths[p.id])
++            eq(env.GameTooltip.lines[i],string.rep("  ",depth).."Unknown branch: "..p.purchased.."/"..p.capacity)
++            for _,child in ipairs(p.children or {}) do depths[child]=depth+1 end
++        end
+         if n==1 then
+             contains(normal,"Unknown branch: 0/30"); eq(#paths,9)
+             excludes(normal,"106192"); excludes(normal,"3902")
+@@ -4933,9 +4938,14 @@
+     for i,tree in ipairs(ui.rows[1].trees) do
+         local value=g.fields["tree:"..tree.id].last.value
+         local text=enter(env,ui.widgets[1].bars[i],false); eq(#env.GameTooltip.lines,#value.paths)
+-        for n,p in ipairs(value.paths) do eq(env.GameTooltip.lines[n],p.name..": "..p.purchased.."/"..p.capacity) end
++        local depths={[value.root]=0}
++        for n,p in ipairs(value.paths) do
++            local depth=assert(depths[p.id])
++            eq(env.GameTooltip.lines[n],string.rep("  ",depth)..p.name..": "..p.purchased.."/"..p.capacity)
++            for _,child in ipairs(p.children or {}) do depths[child]=depth+1 end
++        end
+         for _,prose in ipairs({"Purchased/capacity","Future point","observed","Shift-hover","locked","available",tree.name,"Source pin","Path "}) do lacks(text,prose) end
+-        if i==1 then eq(#env.GameTooltip.lines,9); eq(env.GameTooltip.lines[1],"静かな手: 0/30"); eq(env.GameTooltip.lines[2],"静かな手: 0/30") end
++        if i==1 then eq(#env.GameTooltip.lines,9); eq(env.GameTooltip.lines[1],"静かな手: 0/30"); eq(env.GameTooltip.lines[2],"  静かな手: 0/30") end
+         if i==2 then eq(env.GameTooltip.lines[1],"Écriture tranquille: 10/10"); eq(tree.purchased,50); eq(tree.capacity,70) end
+         local diagnostic=enter(env,ui.widgets[1].bars[i],true)
+         has(diagnostic,"Native rank points / shared-spent reconciled; NOT verified future/all-rank costs")
+@@ -4956,8 +4966,11 @@
+     local db,g=dbWith(values); local env=fixtureAPI(); mockWidgets(env)
+     local c=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,c); ui:Toggle()
+     local text=enter(env,ui.widgets[1].bars[1],false); eq(#env.GameTooltip.lines,64)
+-    eq(env.GameTooltip.lines[1],"静かな手 1: 0/1"); eq(env.GameTooltip.lines[2],"Unknown branch: 0/1")
+-    eq(env.GameTooltip.lines[64],"静かな手 64: 0/1"); lacks(text,"observed"); lacks(text,"Shift-hover")
++    eq(env.GameTooltip.lines[1],"静かな手 1: 0/1"); eq(env.GameTooltip.lines[2],"  Unknown branch: 0/1")
++    eq(env.GameTooltip.lines[64],string.rep("  ",63).."静かな手 64: 0/1"); lacks(text,"observed"); lacks(text,"Shift-hover")
++    for n=1,64 do
++        eq(env.GameTooltip.lines[n],string.rep("  ",n-1)..(n==2 and "Unknown branch" or "静かな手 "..n)..": 0/1")
++    end
+     assert(C.Apply(db,character,identity,{["tree:11"]=C.Observation("error",nil,110,"fixture")},110,"fixture"))
+     ui:Refresh(); enter(env,ui.widgets[1].bars[1],false); eq(#env.GameTooltip.lines,65); eq(env.GameTooltip.lines[65],"Stale data")
+     assert(C.Archive(db,character.guid,2913,120,"fixture")); ui.options.archived=true; ui:Refresh()
+@@ -5768,6 +5781,194 @@
+ end
+ -- U03 END
+ 
++-- U04 BEGIN: presentation-only regressions; fixture helpers are local to this block.
++do
++local V=NS.ViewModel
++local function unchanged(root)
++    local records={}
++    local function visit(t)
++        if type(t)~="table" or records[t] then return end
++        local saved={}; records[t]=saved
++        for k,v in pairs(t) do saved[k]=v; visit(v) end
++    end
++    visit(root)
++    return function()
++        for t,saved in pairs(records) do
++            for k,v in pairs(saved) do eq(t[k],v,"U04 source value/reference unchanged") end
++            for k in pairs(t) do assert(saved[k]~=nil,"U04 no source key added") end
++        end
++    end
++end
++local function forbidReads(env,c)
++    local function forbidden() error("U04 render/hover must not collect") end
++    for _,api in ipairs({env.C_TradeSkillUI,env.C_ProfSpecs,env.C_Traits,env.C_Item,env.C_CurrencyInfo}) do
++        for k,v in pairs(api) do if type(v)=="function" then api[k]=forbidden end end
++    end
++    for _,key in ipairs({"Scan","Request","Knowledge","Gear","Context"}) do c[key]=forbidden end
++end
++local function fixture(values)
++    local env,s=fixtureAPI(); mockWidgets(env)
++    env.CraftArmyDiagnosticsDB={sentinel={points=17}}
++    local db,g=dbWith(values or payloadFixtures())
++    local c=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    return ui,env,c,g,s
++end
++local function enter(env,bar,shift)
++    env.IsShiftKeyDown=function() return shift end
++    bar.scripts.OnEnter(bar)
++    return env.GameTooltip.lines
++end
++local function exactLines(actual,expected)
++    eq(#actual,#expected,"full hover line count")
++    for n,line in ipairs(expected) do eq(actual[n],NS.Dashboard.PlainTooltip(line),"hover line "..n) end
++end
++local function hierarchy()
++    local values=payloadFixtures(); local t=values["tree:11"]; local template=C.Copy(t.paths[1])
++    t.root=111; t.paths={}; t.purchased=8; t.capacity=40
++    t.coverage={discovered=4,captured=4,limit=false}
++    local names={"静かな手","静かな手","Écriture tranquille","Sibling"}
++    local points={3,5,0,0}; local children={{112,114},{113},{},{}}
++    for n=1,4 do
++        local p=C.Copy(template); p.id=110+n; p.name=names[n]; p.purchased=points[n]
++        p.capacity=10; p.children=children[n]; p.locked=n==3; t.paths[n]=p
++    end
++    values.knowledgeIndex[1].root=111
++    return values
++end
++case("U04 real bars numeric zero full unknown labels and built in flat texture",function(checkpoint)
++    for _,mode in ipairs({"zero","full","unknown"}) do
++        local values=payloadFixtures()
++        values.knowledgeIndex[1].name="Blu Cal Per Dar"
++        if mode=="full" then values["tree:11"]=treeValue(11,10,10)
++        elseif mode=="unknown" then values["tree:11"]=nil end
++        local ui,env,c,_,s=fixture(values); local bar=ui.widgets[1].bars[1]
++        local verify=unchanged({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB,s})
++        forbidReads(env,c); ui:Render()
++        eq(bar.label:GetText(),mode=="unknown" and "?" or mode=="full" and "10/10" or "0/10")
++        assert(not bar.label:GetText():find("[:]"),"no name or colon prefix")
++        eq(bar.style.SetStatusBarTexture[1],"Interface\\Buttons\\WHITE8X8")
++        for n,value in ipairs({0.2,0.65,0.95}) do eq(bar.style.SetStatusBarColor[n],value) end
++        eq(bar.style.SetMinMaxValues[1],0); eq(bar.style.SetMinMaxValues[2],1)
++        eq(bar.height,14); eq(bar.background.style.SetColorTexture[1],0.15)
++        eq(bar.background.style.SetColorTexture[2],0.15); eq(bar.background.style.SetColorTexture[3],0.15)
++        eq(bar.background.style.SetColorTexture[4],1)
++        eq(bar.value,mode=="full" and 1 or 0); eq(bar:GetStatusBarTexture().shown,mode~="unknown")
++        exactLines(enter(env,bar,false),bar.tree.summaryTooltip)
++        exactLines(enter(env,bar,true),bar.tree.tooltip)
++        bar.scripts.OnLeave(bar); eq(env.GameTooltip.shown,false); verify()
++        pause(checkpoint,"U04 numeric bar mode")
++    end
++end)
++case("U04 real render geometry one four eight trees uses full column and reuses widgets",function()
++    local ui,env,c,_,s=fixture(); local row=ui.rows[1]; local source=row.trees[1]
++    local pool={}; for n,b in ipairs(ui.widgets[1].bars) do pool[n]=b end
++    local verify=unchanged({c.db,c.fresh,env.CraftArmyDiagnosticsDB,s})
++    forbidReads(env,c)
++    local expected={110,100,150,64,44,44,44,140,110,96,56,292,74,100}
++    eq(ui.frame.width,1454); eq(ui.frame.height,216); eq(ui.viewport.width,1424)
++    local x=15
++    for col,width in ipairs(expected) do
++        local header,cell=ui.headers[col],ui.widgets[1].cells[col]
++        eq(env.fixtureRect(header).x,x); eq(env.fixtureRect(cell).x,x)
++        eq(header.width,width); eq(cell.width,width); eq(cell.height,22); eq(header.height,18)
++        eq(header.label.template,"GameFontHighlightSmall"); eq(cell.label.template,"GameFontHighlightSmall")
++        x=x+width
++    end
++    eq(x,1439)
++    for _,count in ipairs({8,4,1,0,1,0}) do
++        -- Bounded model-only projection; the valid saved DB is never expanded to eight trees.
++        row.trees={}; row.cells[I.Knowledge]=count==0 and "?" or ""
++        for n=1,count do row.trees[n]=C.Copy(source) end
++        if count==1 then row.trees[1].purchased=nil; row.trees[1].capacity=nil; row.trees[1].ratio=nil end
++        ui:Render(); eq(#ui.widgets[1].bars,8)
++        local right=env.fixtureRect(ui.widgets[1].cells[I.Knowledge]).x
++        for n,b in ipairs(pool) do
++            eq(ui.widgets[1].bars[n],b,"same bar widget"); eq(b.shown,n<=count)
++            eq(b.tree,row.trees[n],"hidden bars release old tree")
++            if n<=count then
++                local width=288/count-2; local r=env.fixtureRect(b)
++                eq(b.width,width); eq(b.label.width,width); eq(b.label.allPoints,b); eq(b.height,14)
++                eq(r.x,right); contained(env,b,ui.widgets[1].cells[I.Knowledge],"knowledge bar")
++                if count==4 then eq(width,70); assert(width>53,"old cap removed") end
++                if count==1 then eq(width,286); eq(b.label:GetText(),"?"); eq(b.fill.shown,false)
++                else eq(b.label:GetText(),"0/10"); eq(b.value,0); eq(b.fill.shown,true) end
++                right=r.x+r.w+2
++            end
++        end
++        eq(ui.widgets[1].cells[I.Knowledge].label:GetText(),count==0 and "?" or "")
++        eq(ui.frame.width,1454); eq(ui.frame.height,216); verify()
++    end
++end)
++case("U04 real hierarchy hover root child grandchild sibling UTF duplicate locked zero exact Shift",function()
++    local ui,env,c,g,s=fixture(hierarchy()); local row=ui.rows[1]; local bar=ui.widgets[1].bars[1]
++    local verify=unchanged({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB,s})
++    local detail={}; for n,line in ipairs(row.trees[1].tooltip) do detail[n]=line end
++    forbidReads(env,c); ui:Render()
++    eq(bar.label:GetText(),"8/40"); eq(bar.value,0.2)
++    exactLines(enter(env,bar,false),{"静かな手: 3/10","  静かな手: 5/10",
++        "    Écriture tranquille: 0/10","  Sibling: 0/10"})
++    eq(g.fields["tree:11"].last.value.paths[3].locked,true)
++    exactLines(enter(env,bar,true),detail); exactLines(row.trees[1].tooltip,detail)
++    bar.scripts.OnLeave(bar); eq(env.GameTooltip.shown,false); verify()
++end)
++case("U04 missing child projection and stale archived footers retain indentation and diagnostics",function(checkpoint)
++    local ui,env,c,g=fixture(hierarchy()); local db=c.db
++    local function check(expected)
++        local bar=ui.widgets[1].bars[1]; local verify=unchanged({db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB})
++        exactLines(enter(env,bar,false),expected); exactLines(enter(env,bar,true),bar.tree.tooltip); verify()
++    end
++    local base={"静かな手: 3/10","  静かな手: 5/10","    Écriture tranquille: 0/10","  Sibling: 0/10"}
++    assert(C.Apply(db,character,identity,{["tree:11"]=C.Observation("error",nil,110,"fixture")},110,"fixture"))
++    ui:Refresh(); base[5]="Stale data"; check(base)
++    pause(checkpoint,"U04 stale hierarchy")
++    assert(C.Archive(db,character.guid,2913,120,"fixture")); ui.options.archived=true; ui:Refresh()
++    base[5]="Archived"; check(base)
++    -- Missing child is deliberately only a projection; no malformed snapshot enters DB.
++    local projection=C.Copy(g); local paths=projection.fields["tree:11"].last.value.paths
++    table.remove(paths,3)
++    ui.rows={V.Row(character.guid,db.characters[character.guid],2913,projection,nil,130,false)}
++    local verify=unchanged({db,c.fresh,ui.rows,projection,env.CraftArmyDiagnosticsDB})
++    forbidReads(env,c); ui:Render()
++    check({"静かな手: 3/10","  静かな手: 5/10","    Unknown branch: ?/?","  Sibling: 0/10",
++        "Branch observations unavailable."}); verify()
++end)
++case("U04 all64 hierarchy depths rendered without truncation or Shift mutation",function()
++    local values=payloadFixtures(); local t=values["tree:11"]; local template=C.Copy(t.paths[1])
++    t.paths={}; t.root=1001; t.purchased=0; t.capacity=64
++    t.coverage={discovered=64,captured=64,limit=false}; values.knowledgeIndex[1].root=t.root
++    for n=1,64 do
++        local p=C.Copy(template); p.id=1000+n; p.purchased=0; p.capacity=1; p.name="静かな手"
++        p.children=n<64 and {1001+n} or {}; t.paths[n]=p
++    end
++    local ui,env,c,_,s=fixture(values); local bar=ui.widgets[1].bars[1]
++    local verify=unchanged({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB,s})
++    forbidReads(env,c); ui:Render(); local lines=enter(env,bar,false); eq(#lines,64)
++    for n=1,64 do eq(lines[n],string.rep("  ",n-1).."静かな手: 0/1") end
++    exactLines(enter(env,bar,true),bar.tree.tooltip); verify()
++end)
++case("U04 collected four tree render hover preserve native points session and complete Shift arrays",function()
++    local env,s,f,c=k2Fixture(); mockWidgets(env); assert(c:Scan())
++    env.CraftArmyDiagnosticsDB={sentinel={points=19}}
++    local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    local verify=unchanged({c.db,c.fresh,ui.rows,s,f,env.CraftArmyDiagnosticsDB})
++    local expected={"0/270","50/70","214/270","0/260"}
++    local details={}; for n,t in ipairs(ui.rows[1].trees) do details[n]=C.Copy(t.tooltip) end
++    forbidReads(env,c)
++    for _=1,2 do
++        ui:Render(); eq(#ui.rows[1].trees,4)
++        for n,bar in ipairs(ui.widgets[1].bars) do
++            if n<=4 then
++                eq(bar.width,70); eq(bar.label:GetText(),expected[n]); eq(bar.tree.shortName~=nil,true)
++                exactLines(enter(env,bar,false),bar.tree.summaryTooltip)
++                exactLines(enter(env,bar,true),details[n]); exactLines(bar.tree.tooltip,details[n])
++            else eq(bar.shown,false); eq(bar.tree,nil) end
++        end
++        verify()
++    end
++end)
++end
++-- U04 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# docs/dashboard/README.md baseSHA256=8bf8c9649d271538f33634965d291fc2257f2cc0a2f097f830e3a630b718d22b targetSHA256=a205a884fe5fd2725c230a5686eae01befd948f35fa64f7efcf60c48ac2f9f29
+--- pre-U04/docs/dashboard/README.md
++++ U04/docs/dashboard/README.md
+@@ -2,7 +2,44 @@
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+ 
+-## U03 — Inscription Details; local/static review PASS, native check pending
++## U04 — wider flat knowledge bars; local delivery, review/native visuals pending
++
++Knowledge bars now show **only X/Y or `?`**, without Blu/Cal/Per/Dar prefixes. Stat
++is 140px, Enchant 110px and Knowledge 292px; all other columns and the 1454px outer window,
++row height and fonts are unchanged. Four bars use 70px each (one through eight trees
++share the column). The fill uses built-in solid `WHITE8X8`, with no theme/dependency.
++Normal tree hover retains every captured branch and its individual X/Y, with **two
++spaces per child depth**, root unindented. Duplicate/localized names, unknown branches,
++stale/archive footers and the complete Shift-hover diagnostics remain available.
++This is presentation only: no collection, accounting, saved points or timestamps change.
++
++Local validation: **220/220 addon cases** (214 retained +6 new U04), **744 K6 /565 K7**
++checks, diagnostic 23/23 and both Python structural checks PASS. Missing native clocks
++remain unavailable, not 0 or timing PASS. Fixtures are not native visual/API evidence.
++**Primary actual-baseline comparison and independent U04 review are still required
++before updating installed files.** Native width/fill/indent readability is NOT RUN.
++
++### After primary review — scoped update and cached-data visual check
++
++If already on U03, quit WoW and back up the installed addon and SavedVariables. Update
++**only `CraftArmy/Dashboard.lua`, `CraftArmy/ViewModel.lua`, `CraftArmy/SelfTests.lua`**.
++Preserve `Details.lua`, `Core.lua`, Collectors, all other modules, TOC, SavedVariables
++and diagnostics. If **not** on U03, use the full current `CraftArmy` folder overlay
++without deleting unrelated files instead; retain the pre-update backup because older
++code rejects the optional Details field (see [schema](schema.md#u03-optional-profession-details-report)).
++The user's “Values match correctly” is bounded U03 native value agreement, not proof
++of an exact installed source hash, latency, warning absence or cached persistence.
++
++Use existing cached data: `/ca`, inspect numeric-only labels, wider flat bars and
++root/child/grandchild/sibling indentation. Hold Shift **before** entering a bar to
++check the full diagnostic view; the five silent normal cells, native gear hovers and
++Profession click should remain unchanged. Report visual problems or actual errors.
++**No recollection, Refresh details, full native selftest, V01 restart or new capture
++is needed for U04.** U03 responsiveness/errors/warnings/cache-persistence checks and
++broader T02 acceptance remain pending separately; no install or client run by agents.
++These instructions supersede earlier update/retest instructions below for U04.
++
++## U03 — Inscription Details; static review PASS, bounded native values agreement
+ 
+ Click a row's **Profession** with the left mouse button to open cached branch details.
+ Previous/Next branch shows each branch's own investment, the client's per-point rule
+@@ -34,11 +71,13 @@
+ Native acceptance and release remain incomplete. The initial197/1 local stop
+ is retained in evidence; the final same-frame point check follows the settled primary
+ amendment and keeps its rejecting regression. Native sample61 proves only sampled
+-data feasibility; the new panel/capture/responsiveness/persistence are **NOT RUN**.
+-
+-### Combined U02 + U03 update and focused check
+-
+-The local/static review gate is cleared for this delivery. Quit WoW
++data feasibility. User subsequently reports “Values match correctly”; complete capture
++coverage, responsiveness/errors/warnings and closed/reload persistence are unconfirmed.
++
++### Historical combined U02 + U03 update and focused check
++
++These U03 delivery instructions are historical, **not a request to recollect for U04**.
++The U04 review/update gate above takes precedence. The U03 static review passed. Quit WoW
+ and back up all SavedVariables and the installed addon. Copy the **full current
+ `CraftArmy` folder over the existing addon without deleting anything**, including new
+ `Details.lua` and the updated TOC/Core/Dashboard/SelfTests. This also includes U02's
+@@ -100,8 +139,8 @@
+ 
+ ## Current validation policy — approved 2026-11-07
+ 
+-**No further full `/ca selftest` timing chase is requested.** The combined U03 update
+-above is review-gated; focused native checks follow review. The latest
++**No further full `/ca selftest` timing chase is requested.** The U04 update above
++is review-gated; its focused cached-data visual check follows review. The latest
+ client result is **INCOMPLETE:87 passed/0failed of149**, case88unit2 at134.4ms,
+ wall77323.9ms. It is not a full PASS and does not show an assertion failure. Keep the
+ 100ms/10000-step safety limits and every existing test/workload unchanged.

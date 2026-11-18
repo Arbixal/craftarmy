@@ -1,0 +1,124 @@
+# Primary actual K4 to K4a comparison; source evidence plus separately recorded local Lua results.
+# CraftArmy/SelfTests.lua baselineSHA256=27a1f0ca2697a1154a0036a22dbe9d01ad40465eb137b0a8eaca9fe59dbdc09f targetSHA256=cf2e1e5bf4487283c4311a117e092703b20355eaf0bf91d17542402f1dfbc99c
+--- K4/CraftArmy/SelfTests.lua
++++ K4a/CraftArmy/SelfTests.lua
+@@ -1750,9 +1750,11 @@
+ end
+ case("K1 complete 35 paths full currencies provisional264 once privacy and immutable runtime",function(checkpoint)
+     local env,s,f,runtime=knowledgeFixture()
++    pause(checkpoint,"K4a report fixture ready")
+     for _=1,2 do
++        local r,text,summary
+         trappedCapture(env,runtime,function()
+-            local r=NS.KnowledgeCheck.Capture(env,runtime)
++            r=NS.KnowledgeCheck.Capture(env,runtime)
+             eq(r.captureComplete,true); eq(r.stable,true); eq(r.captured,35); eq(r.discovered,35)
+             eq(r.candidate.points,264); eq(r.shared.spent,264); eq(r.shared.quantity,0)
+             eq(r.reconciliation.status,"provisional match"); eq(r.allRankCosts,"unverified")
+@@ -1767,8 +1769,15 @@
+             eq(r.tabs[1].paths[2].node.isAvailable.value,false); eq(r.tabs[1].paths[2].candidate.capacity,30)
+             eq(p.unlock.entryCost.status,"empty"); eq(p.spend.entryCost.status,"empty"); eq(p.children.status,"observed")
+             eq(r.tabs[4].paths[13].children.status,"empty")
+-            local before=C.Copy(r); local text,summary=NS.KnowledgeCheck.Format(r)
+-            assert(deepEqual(before,r),"Format is pure"); eq(text,NS.KnowledgeCheck.Format(r),"deterministic formatting")
++        end)
++        pause(checkpoint,"K4a capture checked")
++        trappedCapture(env,runtime,function()
++            local before=C.Copy(r); text,summary=NS.KnowledgeCheck.Format(r)
++            assert(deepEqual(before,r),"Format is pure")
++        end)
++        pause(checkpoint,"K4a first format checked")
++        trappedCapture(env,runtime,function()
++            eq(text,NS.KnowledgeCheck.Format(r),"deterministic formatting")
+             eq(summary.captureComplete,true); assert(#text<=262144)
+             for _,secret in ipairs({"PRIVATE-GUID","PRIVATE-NAME","PRIVATE-REALM","PRIVATE-SAVED-DATA","PRIVATE-RUNTIME-REASON","PRIVATE-FORBIDDEN-PAYLOAD","|","\001"}) do assert(not text:find(secret,1,true),secret) end
+             assert(text:find("NOT verified all-rank costs",1,true)); assert(text:find("compared ONCE",1,true))
+# docs/dashboard/README.md baselineSHA256=d3080e75386787d5c75fbb54dce1ae0185700b0b42105cc7249e6ccd51c6fdcd targetSHA256=285f82caf06afcd977818f339519d405a1479abf49545548a2f2d8eb5ef20d77
+--- K4/docs/dashboard/README.md
++++ K4a/docs/dashboard/README.md
+@@ -1,13 +1,16 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** latest user run stopped **INCOMPLETE,81 passed/0 failed
+-of123**, case81 final second-Scan/assert unit122.4ms (wall67041.5ms), exceeding the
+-unchanged100ms limit.42 cases remain uncompleted; case80 passed this run and new
+-cases112–123 remain unexecuted. Internal Scan stages were not measured. K3f was
+-static-reviewed; K4 now delivers **measurement only**, not a production fix or
+-performance PASS. Its fixture timing/terminal-note plumbing awaits independent review.
+-**Do not rerun unchanged K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++**Current selftest paused:** latest user run stopped **INCOMPLETE,50 passed/0 failed
++of134**, case51 grouped protected capture/format unit102.7ms (wall8668.2ms), exceeding
++the unchanged100ms limit.84 cases remain uncompleted;51 started and81 was NOT REACHED:
++Scan stages are **NOT MEASURED**. K4a splits only case51's completed protected groups
++with safe outer pauses; it awaits independent review. K4 measurement was reviewed;
++neither delivery is a production fix or native performance PASS. Original Capture
++still formats internally and remains atomic; individual-operation durations unknown.
++**Do not rerun unchanged K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++Historical K3f81/123 stopped at final second-Scan/assert unit122.4ms (wall67041.5ms),
++with42 uncompleted; it did not measure internal Scan stages either.
+ Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
+ uncompleted and case80 NOT REACHED in that separate run.
+ Historical K3c79/123 stopped at case80 initial unit123.1ms (wall70914.9ms); that
+@@ -49,7 +52,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K4 review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K4a review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -137,8 +140,9 @@
+ lua5.1 tests/dashboard.lua    # only if already installed
+ ```
+ 
+-Python checks do not parse or execute Lua. Historical diagnostic23/23 is not a new
+-result. All new fixture/client results are NOT RUN until recorded in evidence.
++Python checks do not parse or execute Lua. Installed Lua5.1.5 now executes both full
++suites; see evidence for actual K4a134/134 and23/23 results. These isolated fixtures
++do not establish WoW APIs, native100ms performance, warnings or interactivity.
+ 
+ ### R4 update and retest (user only, after independent review)
+ 
+@@ -171,7 +175,7 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K4 stage measurement (current; user only AFTER independent review)
++### K4a case51 grouping and K4 stage measurement (current; user only AFTER independent review)
+ 
+ This changes **only SelfTests.lua**, not Core/Collectors/Knowledge/KnowledgeCheck,
+ Commands, snapshot policy, limits or saved data. All123 old ordered cases/assertions,
+@@ -183,9 +187,15 @@
+ errors. Unexpected Scan errors become `timed scan failed (payload omitted)` after
+ cleanup; ordinary returned success/false/reason are unchanged.
+ 
+-1. **Wait for primary's independent K4 review and coordination.** Fully quit WoW and
+-   back up `WTF`, including production/diagnostic SavedVariables. Already on K3f:
+-   replace **only `CraftArmy/SelfTests.lua`** with the reviewed K4 file. Keep every
++K4a adds three OUTER pause sites in case51: after fixture setup, after capture and
++its original assertions, and after first explicit Format/purity assertions. Each
++repeat now has three full-runtime guarded scopes; overrides restore before pauses.
++Both full35-path captures, all Formats and the final invalid capture remain. No
++yield occurs under pcall/override; no individual atomic-duration guarantee follows.
++
++1. **Wait for primary's independent K4a review and coordination.** Fully quit WoW and
++   back up `WTF`, including production/diagnostic SavedVariables. Already on K4:
++   replace **only `CraftArmy/SelfTests.lua`** with the reviewed K4a file. Keep every
+    other module, `CraftArmyDB`, all SavedVariables and diagnostics unchanged. Same
+    version0.2.0-mvp/Interface120105/schema1; no reset or profiling setting changes.
+ 2. Login/reload and explicitly run **`/ca selftest` out of combat**. STARTED reports
+@@ -222,8 +232,10 @@
+ timing probes or64 active timing frames produce fixed `scan2 timings unavailable
+ (reason)`, **not zero or partial-success metrics**. The original fixture Scan still
+ runs once and its ordinary result is preserved, even if observation fails. Reports
+-are local, never SavedVariables/globals. Local Lua/native K4 execution is **NOT RUN**;
+-Python structure checks and new stub regressions do not establish client API behavior.
++are local, never SavedVariables/globals. Local K4a Lua5.1 fixture execution is recorded
++in evidence; native K4a timing/scheduling/API/warning/interactivity checks are **NOT RUN**.
++Standalone case81 correctly reports `scan2 timings unavailable (clock missing)`;
++Python structure checks and stub regressions do not establish client API behavior.
+ Production optimization48 remains blocked on reviewed user timings and settled design.
+ 
+ ### K3f cases81–82 scan/reload checkpoints (historical instructions)

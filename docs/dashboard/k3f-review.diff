@@ -1,0 +1,177 @@
+# Primary actual K3e to K3f comparison; source evidence, not Lua execution.
+# CraftArmy/SelfTests.lua baselineSHA256=79db1d7e0fd420794b968e3a2aaebad60c9c777be0499decbd1e81134c76185c targetSHA256=e3c3e0755ad2200ccf83df8505d092148f86e6cce28b4c20a0c71da18dbb7ccf
+--- K3e/CraftArmy/SelfTests.lua
++++ K3f/CraftArmy/SelfTests.lua
+@@ -2502,33 +2502,51 @@
+     local old=dbWith({knowledgeRaw=scan(),["tree:11"]=treeValue(11,0,10)})
+     eq(C.Open(old),old,"old schema1 no migration or native inference")
+ end)
+-case("K2 successful scan reload archive hover keeps native zero own evidence time and unspent separate",function()
+-    local _,s,_,c=k2Fixture(); assert(c:Scan())
++case("K2 successful scan reload archive hover keeps native zero own evidence time and unspent separate",function(checkpoint)
++    local _,s,_,c=k2Fixture();
++    pause(checkpoint,"K3f scan fixture ready")
++    assert(c:Scan())
+     local g=c.db.characters[character.guid].professions[2913].active
+     eq(g.fields["tree:1122"].last.value.purchased,0); eq(g.fields["tree:1122"].last.observedAt,100)
+     eq(g.fields.unspent.last.value,0); assert(c.reason:find("shared-spent reconciled",1,true))
++    pause(checkpoint,"K3f first scan verified")
+     local rows=NS.ViewModel.Build(c.db,c.fresh,{},100); eq(#rows,1); eq(rows[1].trees[1].ratio,0)
+     eq(rows[1].trees[1].state.fresh,true); local text=table.concat(rows[1].trees[1].tooltip,"\n")
+     assert(text:find("NOT verified future/all-rank costs",1,true)); assert(text:find("compared ONCE",1,true))
+     assert(text:find("locked; unlock token 3912 distinct from spend currency 3902",1,true))
+-    local reopened=C.Copy(c.db); eq(C.Open(reopened),reopened)
++    pause(checkpoint,"K3f fresh view verified")
++    local reopened=C.Copy(c.db);
++    pause(checkpoint,"K3f database copied")
++    eq(C.Open(reopened),reopened)
++    pause(checkpoint,"K3f database reopened")
+     rows=NS.ViewModel.Build(reopened,{}, {},101); eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].purchased,0)
+-    assert(C.Archive(reopened,character.guid,2913,110,"fixture")); eq(C.Open(reopened),reopened)
++    pause(checkpoint,"K3f historical view verified")
++    assert(C.Archive(reopened,character.guid,2913,110,"fixture"));
++    pause(checkpoint,"K3f database archived")
++    eq(C.Open(reopened),reopened)
++    pause(checkpoint,"K3f archive reopened")
+     eq(#NS.ViewModel.Build(reopened,{}, {},111),0)
++    pause(checkpoint,"K3f archive hidden verified")
+     rows=NS.ViewModel.Build(reopened,{}, {archived=true},111); eq(#rows,1); eq(rows[1].trees[1].purchased,0)
+     eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].state.observedAt,100)
++    pause(checkpoint,"K3f archived view verified")
+     s.at=120; assert(c:Scan()); eq(g.fields["tree:1122"].last.observedAt,100,"old returned generation not mutated")
+ end)
+ case("K2 failed scan preserves ALL coherent trees omitted prior tabs index and nonfresh timestamps",function(checkpoint)
+     for _,mode in ipairs({"mismatch","missingtab","partialtabs","metadata"}) do
+         pause(checkpoint,"K2 stale variant")
+-        local env,s,f,c=k2Fixture(); assert(c:Scan())
++        local env,s,f,c=k2Fixture();
++        pause(checkpoint,"K3f stale fixture ready")
++        assert(c:Scan())
+         local old=c.db.characters[character.guid].professions[2913].active
++        pause(checkpoint,"K3f stale baseline scanned")
+         local saved=C.Copy(old); s.at=120
++        pause(checkpoint,"K3f stale baseline copied")
+         if mode=="mismatch" then f.currencies[1124][1].spent=999
+         elseif mode=="metadata" then f.entries[130933].entryCost=nil
+         elseif mode=="partialtabs" then env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() return nil end
+         else f.tabs={f.tabs[1]}; f.currencies[1122][1].spent=264 end
++        pause(checkpoint,"K3f failure injected")
+         assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
+         for _,id in ipairs({1122,1124,1182,1125}) do
+             local field=g.fields["tree:"..id]; eq(field.last.observedAt,100,mode)
+@@ -2537,6 +2555,7 @@
+             eq(c.fresh[character.guid..":2913"].fields["tree:"..id],nil)
+         end
+         if mode=="partialtabs" then eq(g.fields.knowledgeIndex.last.observedAt,100); eq(#g.fields.knowledgeIndex.last.value,4) end
++        pause(checkpoint,"K3f stale scan verified")
+         local rows=NS.ViewModel.Build(c.db,c.fresh,{},120)
+         eq(rows[1].trees[1].state.stale,true); eq(rows[1].trees[1].state.fresh,false)
+         local text=table.concat(rows[1].trees[1].tooltip,"\n")
+@@ -2544,7 +2563,10 @@
+         assert(not text:find("spent 999",1,true),"retained tree never borrows latest raw")
+         assert(c.reason:find("unknown or stale",1,true))
+     end
+-    local _,_,f,c=k2Fixture(); f.currencies[1124][1].spent=999; assert(c:Scan())
++    local _,_,f,c=k2Fixture(); f.currencies[1124][1].spent=999;
++    pause(checkpoint,"K3f unknown fixture ready")
++    assert(c:Scan())
++    pause(checkpoint,"K3f unknown scan complete")
+     local rows=NS.ViewModel.Build(c.db,c.fresh,{},100)
+     for _,t in ipairs(rows[1].trees) do eq(t.purchased,nil); eq(t.ratio,nil); eq(t.state.known,false) end
+ end)
+# docs/dashboard/README.md baselineSHA256=1c77ec450deec15bd1bdde0c558d278878c13b790467a1034a4db80df2a49714 targetSHA256=2fb479cf06ddbb79f0680b3932d515421624c4427ecf19c4b3e08cd47dfee43d
+--- K3e/docs/dashboard/README.md
++++ K3f/docs/dashboard/README.md
+@@ -1,12 +1,14 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** latest user run stopped **INCOMPLETE,64 passed/0 failed
+-of123**, case64 combined unit100.5ms (wall102289.1ms), exceeding the unchanged100ms
+-limit.64 cases completed PASS,59 remain uncompleted; case80 was NOT REACHED and new
+-cases112–123 remain unexecuted. Individual command timings were not measured. K3e's
+-four outer checkpoints/two protected command scopes await independent review;
+-**do not rerun unchanged K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++**Current selftest paused:** latest user run stopped **INCOMPLETE,81 passed/0 failed
++of123**, case81 combined unit385.3ms (wall73206.2ms), exceeding the unchanged100ms
++limit.81 cases completed PASS,42 remain uncompleted; case80 passed this run and new
++cases112–123 remain unexecuted. Individual Scan/Core/ViewModel timings were not
++measured. K3f's17 outer checkpoints in cases81–82 await independent review;
++**do not rerun unchanged K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
++uncompleted and case80 NOT REACHED in that separate run.
+ Historical K3c79/123 stopped at case80 initial unit123.1ms (wall70914.9ms); that
+ separate run passed case66, with44 uncompleted (80 started), not new case80 validation.
+ Historical K3b66/123 stopped at case66 combined102.8ms
+@@ -46,7 +48,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3e review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3f review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -168,7 +170,7 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K3e case64 protected command checkpoints (current; user only AFTER independent review)
++### K3f cases81–82 scan/reload checkpoints (current; user only AFTER independent review)
+ 
+ The historical user **96 passed / 0 failed** is functional assertion evidence only:
+ the accompanying extended lockup and69x execution-limit warning make safe performance
+@@ -205,7 +207,7 @@
+ definitions/assertions/parameters/full35-path workloads remain. Core operations stay
+ atomic, with no pause inside a protected operation or temporary override; individual
+ operation latency is unmeasured, **not guaranteed<100ms**. Runner/100ms/10000-step cap,
+-Commands, KnowledgeCheck and production accounting are unchanged. The latest user run
++Commands, KnowledgeCheck and production accounting are unchanged. The next user run
+ then stopped **INCOMPLETE64/123,0 failed**, case64 unit1/case return100.5ms,
+ wall102289.1ms:64 completed PASS,59 uncompleted. Case63 completed2599 units; its starting
+ boundary does not establish timing causality. Case80 was NOT REACHED this run, so this
+@@ -220,12 +222,30 @@
+ occurs under pcall or shared override. All original statements/assertions/parameters,
+ 123 ordered cases and workloads remain; helper/runner/Commands/KnowledgeCheck/K2 and
+ 100ms/10000-step limits are frozen. Each command remains atomic and individually
+-unmeasured, **not guaranteed<100ms**. K3e Lua execution/native performance is **NOT RUN**;
+-a later atomic slow-stop returns to planning, not weakened coverage.
+-
+-1. **Wait for primary's independent K3e review.** Only after review/primary coordination,
++unmeasured, **not guaranteed<100ms**.
++
++The latest user run then stopped **INCOMPLETE81/123,0 failed**, case81 unit1/case
++return385.3ms, wall73206.2ms:81 completed PASS,42 uncompleted. Case80 passed this run;
++cases112–123 remain unexecuted. The starting case80 boundary does not attribute the
++case81 combined time to case80. No individual Scan/Core/ViewModel timing or explicit
++warning recurrence/interactivity report was supplied.
++K3f adds ten outer pause sites to case81 between complete fixture, first Scan and
++evidence assertions, fresh ViewModel/hover, Copy, Open, historical ViewModel, Archive,
++archived Open, hidden-archive ViewModel and archived ViewModel/assertion groups. Its
++final time change/second full Scan/old-generation assertion remains atomic to return.
++Adjacent case82 gains seven outer pause sites: per-variant fixture, first Scan/old
++reference, Copy/time change, complete failure injection, second Scan/all four-tree
++freshness/index assertions, final standalone fixture/currency mutation and final Scan.
++Existing variant checkpoints and ViewModel/tooltip/reason assertions remain. Every
++real Scan/Copy/Open/Archive/ViewModel is complete and atomic; no injected API yields,
++jobs/stubs, smaller workloads or changed assertions. All123 ordered cases, production,
++runner and100ms/10000-step limits stay unchanged. K3f Lua/native execution is **NOT RUN**;
++individual atomic latency is unknown, **not guaranteed<100ms**. A later atomic slow-stop
++returns to planning, not weakened integration/coverage.
++
++1. **Wait for primary's independent K3f review.** Only after review/primary coordination,
+     fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
+-   Already on K3d: replace **only `CraftArmy/SelfTests.lua`** with the reviewed K3e file.
++   Already on K3e: replace **only `CraftArmy/SelfTests.lua`** with the reviewed K3f file.
+    Keep **`KnowledgeCheck.lua`**, **`Commands.lua`**, all K2/other addon files,
+    `CraftArmyDB`, diagnostics and all SavedVariables unchanged.
+    Same version0.2.0-mvp/Interface120105/schema1; no reset.
+@@ -255,7 +275,7 @@
+    actual frame scheduling/performance or all-rank costs. `/cad selftest` is separate,
+     unchanged and not requested again by this correction.
+ 
+-#### K3b read-only job contract (module callers; unchanged by K3e, not a new command)
++#### K3b read-only job contract (module callers; unchanged by K3f, not a new command)
+ 
+ `KnowledgeCheck.NewCaptureJob(env,runtime,options?)` and
+ `NewFormatJob(report,options?)` return jobs with `Step()` / `Cancel(reason?)`,

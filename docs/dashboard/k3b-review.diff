@@ -1,0 +1,659 @@
+# Primary-generated actual K3a to K3b source comparison; not Lua execution.
+# CraftArmy/KnowledgeCheck.lua baselineSHA256=0583a6ec9966f19bb53f506042b48fb8f688e3e0117f67187205ddbd45d47da3 targetSHA256=214550def55ff05025c933fe1375cdd969cce954736dbd87403e0e9d6ba43f89
+--- K3a/CraftArmy/KnowledgeCheck.lua
++++ K3b/CraftArmy/KnowledgeCheck.lua
+@@ -213,15 +213,16 @@
+         runtimeStart={status="unavailable"},runtimeEnd={status="not attempted"},
+         discovered=0,captured=0,reconciliation={status="unknown",reason="capture incomplete"},allRankCosts="unverified"}
+ end
+-local function capture(env,runtime,r)
+-    if not plain(runtime) or not integer(runtime.revision) or not integer(runtime.serial) then r.reason="Existing runtime collector token unavailable"; return end
++-- unit returns to the outer Step, never through any of the per-API pcalls.
++local function capture(env,runtime,r,unit)
++    if not plain(runtime) or not integer(runtime.revision) or not integer(runtime.serial) then r.reason="Existing runtime collector token unavailable"; unit("metadata","runtime unavailable"); return end
+     r.runtimeStart={status="observed",revision=runtime.revision,serial=runtime.serial}
+     local localCollector=Collectors.New(env,nil)
+     local start=localCollector:Context() -- The only reused collector operation, with Same below.
+     r.start=boundary(env,start)
+     if not validContext(start) then
+         r.runtimeEnd={status="observed",revision=integer(runtime.revision) and runtime.revision or nil,serial=integer(runtime.serial) and runtime.serial or nil}
+-        r.reason="Own ready Midnight Inscription context/config/sourceCounter unavailable"; return
++        r.reason="Own ready Midnight Inscription context/config/sourceCounter unavailable"; unit("metadata","context unavailable"); return
+     end
+     r.timeStart=scalar(env,"GetServerTime",0)
+     local locale,ls=read(env,"GetLocale"); r.locale={status=ls,value=clean(locale,32)}
+@@ -241,6 +242,7 @@
+     r.tabIDs=ids(tabIDs,ts,8)
+     if not r.tabIDs.complete or #r.tabIDs.items==0 then complete=false end
+     local globalSeen={}
++    unit("metadata","start boundary and metadata")
+     for _,tabRow in ipairs(r.tabIDs.items) do
+         local id=tabRow.value
+         if id then
+@@ -274,6 +276,7 @@
+             end
+             if good(t.root) then discover(t.root.value) end
+             local cursor=1
++            unit("tab","currency and root")
+             while cursor<=#queue do
+                 local pathID=queue[cursor]; cursor=cursor+1
+                 local p={id=pathID}; t.paths[#t.paths+1]=p; t.captured=t.captured+1; r.captured=r.captured+1
+@@ -290,6 +293,7 @@
+                 if not p.complete then t.coverageComplete=false end
+                 p.candidate,p.candidateReason=candidate(p); p.currentUnitCost=unitCost(p)
+                 for _,row in ipairs(p.children.items) do if row.value then discover(row.value) end end
++                unit("path","complete path",1)
+             end
+             if not t.coverageComplete then complete=false end
+         end
+@@ -302,6 +306,7 @@
+         start.staged==false and finish.staged==false and value(r.start.stagingRead)==false and value(r.finish.stagingRead)==false or false
+     r.captureComplete=complete and r.stable and good(r.timeEnd)
+     r.reason=r.captureComplete and "bounded data captured; cost semantics still unverified" or "incomplete data or unstable/staged boundaries"
++    unit("boundary","finish boundary")
+     -- Stage candidates only after *all* ownership/coverage/boundary checks finish.
+     local eligible=r.captureComplete
+     local points,capacity,common=0,0,nil
+@@ -315,6 +320,7 @@
+         end
+         if te then t.candidate={points=tp,capacity=tc} else eligible=false end
+         points=points+tp; capacity=capacity+tc
++        unit("reconciliation","tab candidates")
+     end
+     if eligible and common then
+         r.candidate={points=points,capacity=capacity}
+@@ -327,10 +333,12 @@
+             if count~=1 or not good(found.quantity) or not good(found.spent) then eligible=false
+             elseif not shared then shared={id=common,quantity=found.quantity.value,spent=found.spent.value}
+             elseif shared.quantity~=found.quantity.value or shared.spent~=found.spent.value then eligible=false end
++            unit("reconciliation","tab shared currency")
+         end
+         if eligible and shared then r.shared=shared; r.reconciliation={status=points==shared.spent and "provisional match" or "provisional mismatch",reason="shared spent compared ONCE; other currencies excluded; all-rank costs UNVERIFIED"}
+         else r.reconciliation.reason="missing/duplicate/conflicting shared currency rows" end
+     else r.reconciliation.reason="candidate guards, coverage, common path currency or stable unstaged boundaries unavailable" end
++    unit("reconciliation","collection finished")
+ end
+ 
+ -- Only module-owned projections reach this serializer. Strings/keys remain sanitized;
+@@ -358,15 +366,20 @@
+     seen[v]=nil
+     return "{"..table.concat(parts,";").."}"
+ end
+-function Check.Format(r)
++local function format(r,unit)
+     local lines,bytes,clipped={},0,false
++    local attempts=0
+     local function add(label,v)
+-        if clipped then return end
+-        local budget={}
+-        local s=label..(v~=nil and (" "..encode(v,0,{},budget)) or "")
+-        if budget.clipped then clipped=true; return end
+-        if #lines>=4080 or bytes+#s+1>262144-4096 then clipped=true; return end
+-        if not clipped then lines[#lines+1]=s; bytes=bytes+#s+1 end
++        -- Clipped no-ops still count: traversing the rest is bounded work too.
++        if not clipped then
++            local budget={}
++            local s=label..(v~=nil and (" "..encode(v,0,{},budget)) or "")
++            if budget.clipped then clipped=true
++            elseif #lines>=4080 or bytes+#s+1>262144-4096 then clipped=true
++            else lines[#lines+1]=s; bytes=bytes+#s+1 end
++        end
++        attempts=attempts+1
++        if attempts==8 then unit("format","eight line attempts",0,attempts); attempts=0 end
+     end
+     add("CraftArmy knowledgecheck version1 BEGIN"); add(WARNING); add(BOUNDS)
+     add("Sources: protected GetBuildInfo (version/build/interface), GetLocale, GetServerTime; C_ProfSpecs tab/root/children/unlock/spend/currency; C_Traits node/entry/current costs/committed tree currencies. Context/Same use a new ephemeral collector only.")
+@@ -386,6 +399,8 @@
+             add("candidate rank points/capacity (NOT verified all-rank costs)",{candidate=p.candidate,reason=p.candidateReason})
+         end
+     end
++    -- Separate body from bounded summary/footer encoding and final concat.
++    unit("format","body finished",0,attempts)
+     clipped=clipped or r.outputTruncated==true
+     local effective={captureComplete=r.captureComplete==true and not clipped,outputTruncated=clipped,
+         stable=r.stable==true,discovered=r.discovered,captured=r.captured,reason=r.reason,
+@@ -393,7 +408,12 @@
+     if effective.captureComplete then
+         effective.candidate=r.candidate; effective.shared=r.shared
+         effective.trees={}
+-        for _,t in ipairs(r.tabs or {}) do effective.trees[#effective.trees+1]={id=t.id,candidate=t.candidate} end
++        local count=0
++        for _,t in ipairs(r.tabs or {}) do
++            effective.trees[#effective.trees+1]={id=t.id,candidate=t.candidate}
++            count=count+1
++            if count==8 then unit("format","summary trees"); count=0 end
++        end
+     end
+     local ending="CraftArmy knowledgecheck version1 END - "..WARNING
+     local summaryText="END SUMMARY version1 "..encode(effective,0,{},{})
+@@ -410,21 +430,100 @@
+     lines[#lines+1]=ending
+     return table.concat(lines,"\n"),effective
+ end
++-- Jobs own only their coroutine while running. No closures on the job retain the
++-- borrowed env/runtime/report after cancellation, failure or completion.
++local Job={}
++Job.__index=Job
++local UNIT_TOKEN={}
++local function stop(job,reason)
++    job.status="incomplete"; job.completed=false; job.reason=reason
++    job.phase="incomplete"; job.label=reason; job.worker=nil
++    job.report=nil; job.text=nil; job.summary=nil
++end
++function Job:Cancel(reason)
++    if self.status=="running" then stop(self,"cancelled: "..(clean(reason,96) or "requested")) end
++    return self
++end
++function Job:Step()
++    if self.status~="running" then return self end
++    if self.steps>=self.stepLimit then stop(self,"job step limit reached"); return self end
++    self.steps=self.steps+1; self.pathUnits=0; self.lineAttempts=0
++    -- Native resume, not pcall around a yielding worker. API pcalls finish before
++    -- unit yields; unexpected private graph/format errors never escape or leak.
++    local ok,a,b,label,paths,attempts=coroutine.resume(self.worker)
++    if not ok then stop(self,"job failure (payload omitted)"); return self end
++    if coroutine.status(self.worker)=="dead" then
++        self.worker=nil; self.status="complete"; self.completed=true
++        self.phase="complete"; self.label="job complete"
++        if self.kind=="capture" then self.report=a else self.text=a; self.summary=b end
++    else
++        if a~=UNIT_TOKEN then stop(self,"unexpected job yield (payload omitted)"); return self end
++        self.phase=b; self.label=label; self.pathUnits=paths or 0; self.lineAttempts=attempts or 0
++    end
++    return self
++end
++local function newJob(kind,options)
++    local job=setmetatable({kind=kind,status="running",completed=false,steps=0,
++        stepLimit=10000,phase=kind=="capture" and "metadata" or "format",label="not started",
++        pathUnits=0,lineAttempts=0},Job)
++    if options~=nil then
++        if not plain(options) then stop(job,"invalid job options"); return job end
++        -- Only one recognized key; inspect at most two, not an unbounded options graph.
++        local key=next(options)
++        if key~=nil and (key~="stepLimit" or next(options,key)~=nil) then stop(job,"invalid job options"); return job end
++        local limit=options.stepLimit
++        if limit~=nil then
++            if not integer(limit,1) or limit>10000 then stop(job,"invalid job step limit"); return job end
++            job.stepLimit=limit
++        end
++    end
++    return job
++end
++local function unit(phase,label,paths,attempts) coroutine.yield(UNIT_TOKEN,phase,label,paths,attempts) end
++function Check.NewCaptureJob(env,runtime,options)
++    local job=newJob("capture",options)
++    if job.status~="running" then return job end
++    job.worker=coroutine.create(function()
++        local r=blank()
++        capture(env,runtime,r,unit)
++        local _,summary=format(r,unit)
++        if summary.outputTruncated then
++            r.outputTruncated=true; r.captureComplete=false; r.candidate=nil; r.shared=nil
++            r.reconciliation={status="unknown",reason="output clipped; no passing totals"}
++            for _,t in ipairs(r.tabs) do t.candidate=nil end
++        end
++        return r
++    end)
++    return job
++end
++-- Caller-owned immutable borrowed input until terminal. Never Core.Copy this graph:
++-- a full read-only report can legitimately exceed the snapshot copy budget.
++function Check.NewFormatJob(report,options)
++    local job=newJob("format",options)
++    if job.status=="running" then job.worker=coroutine.create(function() return format(report,unit) end) end
++    return job
++end
++local function drain(job)
++    while job.status=="running" do job:Step() end
++    return job
++end
++local function failedReport(reason)
++    local r=blank()
++    r.reason=reason; r.reconciliation={status="unknown",reason="protected capture failure"}
++    return r
++end
+ function Check.Capture(env,runtime)
+-    local r=blank()
+-    local ok=pcall(capture,env,runtime,r)
+-    if not ok then
+-        r.captureComplete=false; r.stable=false; r.reason="protected capture failure (payload omitted)"
+-        r.candidate=nil; r.shared=nil; r.reconciliation={status="unknown",reason="protected capture failure"}
+-        for _,t in ipairs(r.tabs) do t.candidate=nil end
+-    end
+-    local _,summary=Check.Format(r)
+-    if summary.outputTruncated then
+-        r.outputTruncated=true; r.captureComplete=false; r.candidate=nil; r.shared=nil
+-        r.reconciliation={status="unknown",reason="output clipped; no passing totals"}
+-        for _,t in ipairs(r.tabs) do t.candidate=nil end
+-    end
+-    return r
++    local job=drain(Check.NewCaptureJob(env,runtime))
++    return job.report or failedReport("protected capture failure (payload omitted)")
++end
++function Check.Format(report)
++    local job=drain(Check.NewFormatJob(report))
++    if job.status=="complete" then return job.text,job.summary end
++    -- A fresh tiny version1 fallback, never a clipped prefix or borrowed candidates.
++    local r=failedReport("format incomplete (payload omitted)")
++    r.outputTruncated=true
++    local fallback=drain(Check.NewFormatJob(r))
++    return fallback.text,fallback.summary
+ end
+ 
+ function Check.Show(env,text,previous)
+# CraftArmy/SelfTests.lua baselineSHA256=8d2e9be128ddd18d73a1bb8f71c8a974ed246872b5d3d283b0924f888aa97426 targetSHA256=1987100363dd229b130ee352523060950fe3d85745e362d24a063dcbec77e933
+--- K3a/CraftArmy/SelfTests.lua
++++ K3b/CraftArmy/SelfTests.lua
+@@ -1526,7 +1526,7 @@
+ 
+ -- K1 fixtures deliberately differ from API ordering and keep the shared row last.
+ -- These are synthetic inputs, NOT evidence of installed-client cost semantics.
+-local function knowledgeFixture(shape)
++local function knowledgeFixture(shape,checkpoint)
+     local env,state=fixtureAPI()
+     shape=shape or {9,4,9,13}
+     local f={tabs={},nodes={},entries={},children={},costs={},currencies={},unlock={},spend={},currency={}}
+@@ -1559,12 +1559,14 @@
+                 entryIDs={un,sp},entryIDsWithCommittedRanks=committed,entryIDToRanksIncreased={[un]=0,[sp]=0}}
+             f.children[id]=i<n and {id+1} or {}
+             f.costs[id]={{ID=3902,amount=1}}
++            pause(checkpoint,"K3b synthetic path setup")
+         end
+         local rows={{traitCurrencyID=3900,quantity=0,spent=4}}
+         local count=({11,6,11,15})[ti] or 15
+         for j=2,count-1 do rows[j]={traitCurrencyID=5000+ti*100+j,quantity=0,spent=0} end
+         rows[count]={traitCurrencyID=3902,quantity=0,spent=264}
+         f.currencies[tab.id]=rows
++        pause(checkpoint,"K3b synthetic tab setup")
+     end
+     local p,t=env.C_ProfSpecs,env.C_Traits
+     p.GetSpecTabIDsForSkillLine=function(id)
+@@ -1872,21 +1874,42 @@
+         eq(mode==3 and r.tabs[2].flags.sharedOwnership or r.tabs[1].flags.cycleOrDuplicate,true)
+     end
+ end)
++-- Outside protected helpers/namespace overrides: each returned job unit gets its
++-- own existing runner checkpoint. Completion of work is not data completeness.
++local function steppedJob(job,checkpoint)
++    while job.status=="running" do
++        eq(job.report,nil); eq(job.text,nil); eq(job.summary,nil)
++        job:Step()
++        assert(job.pathUnits<=1,"one complete path per Step")
++        assert(job.lineAttempts<=8,"eight attempts including clipped no-ops")
++        pause(checkpoint,"K3b "..job.phase.." "..job.label)
++    end
++    eq(job.status,"complete"); eq(job.completed,true); eq(job.worker,nil)
++    return job
++end
+ case("K1 byte and line budgets retain reserved end summary never clipped success and pure format",function(checkpoint)
+-    local env,_,_,c=knowledgeFixture({64,64,64,64,64,64,64,64})
+-    local r=NS.KnowledgeCheck.Capture(env,c); incomplete(r); eq(r.outputTruncated,true)
++    local env,_,_,c=knowledgeFixture({64,64,64,64,64,64,64,64},checkpoint)
++    local r=steppedJob(NS.KnowledgeCheck.NewCaptureJob(env,c),checkpoint).report; incomplete(r); eq(r.outputTruncated,true)
++    eq(#r.tabs,8); eq(r.captured,512); eq(r.discovered,512)
++    for _,tab in ipairs(r.tabs) do eq(tab.captured,64); eq(tab.discovered,64); eq(#tab.paths,64) end
+     pause(checkpoint,"K1 maximum capture")
+-    local text,summary=NS.KnowledgeCheck.Format(r)
++    local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(r),checkpoint)
++    local text,summary=formatted.text,formatted.summary
+     pause(checkpoint,"K1 byte budget format")
+     eq(summary.outputTruncated,true); eq(summary.captureComplete,false); eq(summary.reconciliation.status,"unknown")
+     assert(#text<=262144); local _,lines=text:gsub("\n",""); assert(lines+1<=4096)
+     assert(text:find("version1 END",1,true)); assert(text:find("END SUMMARY version1",1,true)); assert(not text:find("provisional match",1,true))
++    for _,secret in ipairs({"PRIVATE-GUID","PRIVATE-NAME","PRIVATE-REALM","PRIVATE-SAVED-DATA","PRIVATE-RUNTIME-REASON","|","\001"}) do assert(not text:find(secret,1,true),secret) end
+     -- Minimal records isolate the line budget from the byte budget.
+     local report={tabs={{paths={},currencies={items={},complete=true}}},captureComplete=true,stable=true,
+         reconciliation={status="provisional match"},captured=600,discovered=600}
+-    for i=1,600 do report.tabs[1].paths[i]={id=i} end
++    for i=1,600 do
++        report.tabs[1].paths[i]={id=i}
++        if i%8==0 then pause(checkpoint,"K3b minimal record setup") end
++    end
+     local verify=unchangedGraph(report)
+-    text,summary=NS.KnowledgeCheck.Format(report); verify()
++    formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(report),checkpoint)
++    text,summary=formatted.text,formatted.summary; verify()
+     pause(checkpoint,"K1 line budget format")
+     eq(summary.outputTruncated,true); eq(summary.captureComplete,false); assert(#text<=262144)
+     local _,n=text:gsub("\n",""); assert(n+1<=4096); assert(n>4000,"line bound actually exercised")
+@@ -3200,6 +3223,219 @@
+     cmd:Run("selftest"); s:CheckStopped(); eq(#s.log,0)
+ end)
+ 
++-- K3b additions only: original111 cases above keep their order/assertions/stress.
++case("K3b stepped capture and format synchronous parity on fresh normal zero API error mismatch and clipped inputs",function(checkpoint)
++    for _,mode in ipairs({"normal","zero","error","mismatch","clipped"}) do
++        local function input()
++            local shape
++            if mode~="normal" then shape={3,2} end
++            local e,s,f,c=knowledgeFixture(shape)
++            if mode=="zero" then
++                for _,n in pairs(f.nodes) do n.currentRank=0; n.ranksPurchased=0 end
++                for _,rows in pairs(f.currencies) do rows[#rows].spent=0 end
++            elseif mode=="error" then e.C_Traits.GetNodeCost=function() error("PRIVATE-JOB-API-ERROR") end
++            elseif mode=="mismatch" then for _,rows in pairs(f.currencies) do rows[#rows].spent=1 end
++            elseif mode=="clipped" then e.C_ProfSpecs.GetTabInfo=function() return {name="clip input"} end end
++            return e,c
++        end
++        local e,c=input(); local synchronous=NS.KnowledgeCheck.Capture(e,c)
++        pause(checkpoint,"K3b synchronous parity capture")
++        local ee,cc=input(); local job=steppedJob(NS.KnowledgeCheck.NewCaptureJob(ee,cc),checkpoint)
++        assert(deepEqual(synchronous,job.report),"same fresh synthetic data")
++        if mode=="normal" or mode=="zero" then eq(job.report.captureComplete,true)
++        elseif mode=="error" then incomplete(job.report)
++        elseif mode=="mismatch" then eq(job.report.reconciliation.status,"provisional mismatch") end
++        -- A borrowed format input can be explicitly clipped without reusing a
++        -- prior candidate. This is separate from the full512 byte stress in case63.
++        if mode=="clipped" then synchronous.outputTruncated=true; job.report.outputTruncated=true end
++        local text,summary=NS.KnowledgeCheck.Format(synchronous)
++        pause(checkpoint,"K3b synchronous parity format")
++        local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(job.report),checkpoint)
++        eq(text,formatted.text); assert(deepEqual(summary,formatted.summary))
++        assert(not text:find("PRIVATE-JOB-API-ERROR",1,true))
++        if mode=="clipped" then eq(summary.captureComplete,false); eq(summary.candidate,nil); eq(summary.shared,nil); eq(summary.trees,nil) end
++    end
++end)
++case("K3b capture units independently count actual node reads and hide every partial result",function(checkpoint)
++    local e,_,_,c=knowledgeFixture({5,3}); local reads=0
++    local original=e.C_Traits.GetNodeInfo
++    e.C_Traits.GetNodeInfo=function(...) reads=reads+1; return original(...) end
++    local job=NS.KnowledgeCheck.NewCaptureJob(e,c); local paths=0
++    while job.status=="running" do
++        eq(job.report,nil); eq(job.text,nil); eq(job.summary,nil)
++        local before=reads; job:Step()
++        assert(reads-before<=1,"actual reads, not just a job counter")
++        eq(reads-before,job.pathUnits); paths=paths+job.pathUnits
++        pause(checkpoint,"K3b actual path unit")
++    end
++    eq(job.status,"complete"); eq(paths,8); eq(reads,8); eq(job.report.captured,8); eq(job.worker,nil)
++end)
++case("K3b format units count eight attempts even after early clipping with immutable input",function(checkpoint)
++    for _,clip in ipairs({false,true}) do
++        local report={tabs={{paths={},currencies={items={}}}},captureComplete=true,stable=true,
++            candidate={points=0,capacity=0},shared={spent=0},reconciliation={status="provisional match"}}
++        for i=1,20 do report.tabs[1].paths[i]={id=i} end
++        if clip then report.sourcePin={}; report.sourcePin.loop=report.sourcePin end
++        local verify=unchangedGraph(report)
++        local job=NS.KnowledgeCheck.NewFormatJob(report); local attempts,chunks=0,0
++        while job.status=="running" do
++            eq(job.text,nil); eq(job.summary,nil); job:Step()
++            assert(job.lineAttempts<=8); attempts=attempts+job.lineAttempts
++            if job.lineAttempts==8 then chunks=chunks+1 end
++            verify(); pause(checkpoint,"K3b eight format attempts")
++        end
++        eq(attempts,14+2+20*7); eq(chunks,19); eq(job.completed,true); eq(job.worker,nil)
++        eq(job.summary.outputTruncated,clip)
++        if clip then eq(job.summary.candidate,nil); eq(job.summary.shared,nil); eq(job.summary.trees,nil); assert(not job.text:find("provisional match",1,true)) end
++        assert(#job.text<=262144); assert(job.text:find("END SUMMARY version1",1,true)); verify()
++    end
++end)
++local function terminalJob(job)
++    eq(job.status,"incomplete"); eq(job.completed,false); eq(job.worker,nil)
++    eq(job.report,nil); eq(job.text,nil); eq(job.summary,nil)
++    for _,key in ipairs({"env","runtime","input","work","buffer"}) do eq(job[key],nil) end
++    local steps,reason=job.steps,job.reason
++    job:Step(); job:Cancel("repeat"); job:Step(); eq(job.steps,steps); eq(job.reason,reason)
++end
++case("K3b cancellation before capture between paths and during private formatting releases work",function(checkpoint)
++    for _,phase in ipairs({"before","path","format"}) do
++        local e,_,_,c=knowledgeFixture({4}); local job=NS.KnowledgeCheck.NewCaptureJob(e,c)
++        if phase~="before" then
++            while job.status=="running" and job.phase~=phase do
++                job:Step(); pause(checkpoint,"K3b reach capture cancellation")
++            end
++            eq(job.status,"running"); eq(job.phase,phase)
++        end
++        job:Cancel("requested\001|cancel"); terminalJob(job)
++        assert(not job.reason:find("|",1,true)); assert(not job.reason:find("\001",1,true))
++        pause(checkpoint,"K3b cancelled capture")
++    end
++end)
++case("K3b independent jobs repeated terminal calls and format cancellation retain only results",function(checkpoint)
++    local e,_,_,c=knowledgeFixture({2})
++    local a=NS.KnowledgeCheck.NewCaptureJob(e,c); local b=NS.KnowledgeCheck.NewCaptureJob(e,c)
++    a:Step(); b:Step(); a:Cancel(); terminalJob(a)
++    b=steppedJob(b,checkpoint); local result=b.report; local steps=b.steps
++    b:Step(); b:Cancel(); eq(b.report,result); eq(b.steps,steps); eq(b.status,"complete"); eq(b.worker,nil)
++    local verify=unchangedGraph(result)
++    local x=NS.KnowledgeCheck.NewFormatJob(result); local y=NS.KnowledgeCheck.NewFormatJob(result)
++    x:Step(); y:Step(); x:Cancel(); terminalJob(x); verify()
++    y=steppedJob(y,checkpoint); local text,summary=y.text,y.summary; steps=y.steps
++    y:Step(); y:Cancel(); eq(y.text,text); eq(y.summary,summary); eq(y.steps,steps); eq(y.worker,nil); verify()
++end)
++case("K3b lowered job cap and invalid options fail closed without starting API work",function(checkpoint)
++    local e,_,_,c=knowledgeFixture({2}); local reads=0; local original=e.GetServerTime
++    e.GetServerTime=function() reads=reads+1; return original() end
++    local bad={{v=false},{v=3},{v="bad"},{v=setmetatable({},{})},{v={unknown=1}},
++        {v={stepLimit=0}},{v={stepLimit=-1}},{v={stepLimit=1.5}},{v={stepLimit=10001}},{v={stepLimit="1"}},
++        {v={stepLimit=false}},{v={stepLimit=1,extra=1}}}
++    for _,sample in ipairs(nonfiniteSamples()) do bad[#bad+1]={v={stepLimit=sample.value}} end
++    for _,options in ipairs(bad) do
++        terminalJob(NS.KnowledgeCheck.NewCaptureJob(e,c,options.v))
++        terminalJob(NS.KnowledgeCheck.NewFormatJob({},options.v))
++        eq(reads,0); pause(checkpoint,"K3b invalid options")
++    end
++    for _,kind in ipairs({"capture","format"}) do
++        local job=kind=="capture" and NS.KnowledgeCheck.NewCaptureJob(e,c,{stepLimit=1}) or NS.KnowledgeCheck.NewFormatJob({},{stepLimit=1})
++        eq(job.stepLimit,1); job:Step(); eq(job.status,"running"); eq(job.steps,1)
++        job:Step(); terminalJob(job); eq(job.steps,1); pause(checkpoint,"K3b lowered cap")
++    end
++    local job=NS.KnowledgeCheck.NewCaptureJob(e,c,{stepLimit=10000}); eq(job.stepLimit,10000); job:Cancel(); terminalJob(job)
++    job=NS.KnowledgeCheck.NewFormatJob({},{}); eq(job.stepLimit,10000); job:Cancel(); terminalJob(job)
++end)
++case("K3b private capture and format exceptions are payload-free incomplete compatibility evidence",function(checkpoint)
++    local e,_,_,c=knowledgeFixture({2})
++    e.C_ProfSpecs=setmetatable({},{__index=function() error("PRIVATE-UNEXPECTED-JOB |Hbad|h") end})
++    local job=NS.KnowledgeCheck.NewCaptureJob(e,c); job:Step(); terminalJob(job)
++    assert(not job.reason:find("PRIVATE-UNEXPECTED-JOB",1,true))
++    local r=NS.KnowledgeCheck.Capture(e,c); incomplete(r); eq(r.stable,false); eq(#r.tabs,0)
++    pause(checkpoint,"K3b exception compatibility capture")
++    e.C_ProfSpecs=setmetatable({},{__index=function() coroutine.yield("PRIVATE-UNEXPECTED-YIELD") end})
++    job=NS.KnowledgeCheck.NewCaptureJob(e,c); job:Step(); terminalJob(job)
++    assert(not job.reason:find("PRIVATE-UNEXPECTED-YIELD",1,true))
++    pause(checkpoint,"K3b unexpected yield isolated")
++    local bad=setmetatable({},{__index=function() error("PRIVATE-FORMAT-ERROR") end})
++    job=NS.KnowledgeCheck.NewFormatJob(bad); job:Step(); terminalJob(job)
++    assert(not job.reason:find("PRIVATE-FORMAT-ERROR",1,true))
++    local text,summary=NS.KnowledgeCheck.Format(bad)
++    eq(summary.captureComplete,false); eq(summary.outputTruncated,true); eq(summary.candidate,nil); eq(summary.shared,nil); eq(summary.trees,nil)
++    assert(text:find("version1 BEGIN",1,true)); assert(text:find("END SUMMARY version1",1,true)); assert(text:find("version1 END",1,true))
++    assert(text:find("format incomplete",1,true)); assert(not text:find("PRIVATE-FORMAT-ERROR",1,true)); assert(#text<=262144)
++end)
++case("K3b between-slice identity source config revision serial staging and close invalidate whole interval",function(checkpoint)
++    for mode=1,8 do
++        local e,s,_,c=knowledgeFixture({4,2}); local job=NS.KnowledgeCheck.NewCaptureJob(e,c)
++        repeat job:Step(); pause(checkpoint,"K3b reach first path race") until job.phase=="path" or job.status~="running"
++        eq(job.status,"running")
++        if mode==1 then e.UnitGUID=function() return "Player-PRIVATE-OTHER" end
++        elseif mode==2 then s.info.sourceCounter=2
++        elseif mode==3 then e.C_ProfSpecs.GetConfigIDForSkillLine=function() return 1002 end
++        elseif mode==4 then c.revision=c.revision+1
++        elseif mode==5 then c.serial=c.serial+1
++        elseif mode==6 then e.C_Traits.ConfigHasStagedChanges=function() return true end
++        elseif mode==7 then s.shown=false
++        else s.info.professionID=999 end
++        job=steppedJob(job,checkpoint); incomplete(job.report); eq(job.report.stable,false)
++        for _,t in ipairs(job.report.tabs) do eq(t.candidate,nil) end
++        local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(job.report),checkpoint)
++        eq(formatted.summary.candidate,nil); assert(not formatted.text:find("PRIVATE-OTHER",1,true))
++    end
++end)
++case("K3b completed work differs from data completeness protected statuses and empty versus nil",function(checkpoint)
++    for _,mode in ipairs({"empty","nil","error","unsupported"}) do
++        local e,_,_,c=knowledgeFixture({1})
++        e.C_Traits.GetNodeCost=function() if mode=="error" then error("PRIVATE-COST-ERROR") end; if mode=="empty" then return {} end end
++        if mode=="unsupported" then e.C_Traits.GetNodeCost=nil end
++        local job=steppedJob(NS.KnowledgeCheck.NewCaptureJob(e,c),checkpoint)
++        eq(job.completed,true); eq(firstPath(job.report).costs.status,mode)
++        eq(job.report.captureComplete,mode=="empty")
++        local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(job.report),checkpoint)
++        assert(not formatted.text:find("PRIVATE-COST-ERROR",1,true))
++        assert(formatted.text:find("all-rank costs",1,true))
++    end
++end)
++case("K3b formatting does not refresh context or capture time after collection finishes",function(checkpoint)
++    local e,s,_,c=knowledgeFixture({2}); local times=0
++    e.GetServerTime=function() times=times+1; return 100+times end
++    local job=NS.KnowledgeCheck.NewCaptureJob(e,c)
++    repeat job:Step(); pause(checkpoint,"K3b collection before pure formatting") until job.phase=="format" or job.status~="running"
++    eq(job.status,"running"); eq(times,2)
++    s.shown=false; c.revision=c.revision+1; c.serial=c.serial+1
++    e.C_ProfSpecs=setmetatable({},{__index=function() error("must not requery") end})
++    e.GetServerTime=function() error("must not retime") end
++    job=steppedJob(job,checkpoint); eq(job.report.captureComplete,true); eq(job.report.stable,true)
++    eq(job.report.timeStart.value,101); eq(job.report.timeEnd.value,102); eq(times,2)
++    local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(job.report),checkpoint)
++    eq(formatted.summary.captureComplete,true); eq(times,2)
++end)
++case("K3b stepped jobs retain read-only traps without yielding across namespace overrides",function(checkpoint)
++    local e,s,_,c=knowledgeFixture({2}); local job=NS.KnowledgeCheck.NewCaptureJob(e,c)
++    e.CreateFrame=function() error("PRIVATE-NO-UI") end
++    while job.status=="running" do
++        -- Step returns before trappedCapture restores the temporary namespace.
++        trappedCapture(e,c,function() job:Step() end)
++        pause(checkpoint,"K3b protected unit returned")
++    end
++    eq(job.status,"complete"); eq(job.report.captureComplete,true); eq(s.requests,0); eq(#s.timers,0)
++    local formatted=steppedJob(NS.KnowledgeCheck.NewFormatJob(job.report),checkpoint)
++    for _,secret in ipairs({"PRIVATE-GUID","PRIVATE-NAME","PRIVATE-REALM","PRIVATE-SAVED-DATA","PRIVATE-RUNTIME-REASON","PRIVATE-NO-UI","PRIVATE-FORBIDDEN-PAYLOAD","|","\001"}) do assert(not formatted.text:find(secret,1,true),secret) end
++end)
++case("K3b summary reserve overflow is incomplete and immutable in synchronous and stepped formatting",function(checkpoint)
++    local report={tabs={{paths={},currencies={items={}}}},captureComplete=true,stable=true,
++        candidate={},shared={spent=0},reconciliation={status="provisional match"}}
++    for i=1,24 do report.candidate[i]=string.rep("x",256) end
++    local verify=unchangedGraph(report)
++    local text,summary=NS.KnowledgeCheck.Format(report); verify()
++    pause(checkpoint,"K3b synchronous summary reserve")
++    local job=steppedJob(NS.KnowledgeCheck.NewFormatJob(report),checkpoint); verify()
++    eq(job.text,text); assert(deepEqual(job.summary,summary))
++    eq(summary.outputTruncated,true); eq(summary.captureComplete,false)
++    eq(summary.candidate,nil); eq(summary.shared,nil); eq(summary.trees,nil)
++    eq(summary.reconciliation.reason,"summary reserve exceeded; no passing totals")
++    assert(not text:find("provisional match",1,true)); assert(text:find("END SUMMARY version1",1,true)); assert(text:find("version1 END",1,true))
++    assert(#text<=262144); local _,n=text:gsub("\n",""); assert(n+1<=4096)
++end)
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# docs/dashboard/README.md baselineSHA256=1a3ad3ad6c28644a7d11fe1da4dc58ed95ef6e75ea4a2fc50f8c8d3f099c4da5 targetSHA256=3758d4cc17558fac6d8f09ffbd07898d78421c53eb15fee82a8ebec5c8e21c54
+--- K3a/docs/dashboard/README.md
++++ K3b/docs/dashboard/README.md
+@@ -1,10 +1,11 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** K3 stopped correctly **INCOMPLETE,42 passed/0 failed of111**
+-at a109.7ms unit (wall5860.4ms), exceeding the unchanged100ms limit. This is not a full
+-suite PASS. K3a checkpoint-only correction below awaits independent review; do **not**
+-rerun the unchanged K3 or old synchronous suite. Historical96/96 accompanied extended
++**Current selftest paused:** K3a stopped correctly **INCOMPLETE,62 passed/0 failed of111**
++at case63 combined setup/capture/format unit140.4ms (wall20823.1ms), exceeding the
++unchanged100ms limit. Individual phase timings were not measured. K3b bounded jobs
++below await independent review; **do not rerun unchanged K3a/K3 or the old synchronous
++suite**. New123 definitions are NOT RUN, not a performance PASS. Historical96/96 accompanied extended
+ lockup/execution-limit warnings; recurrence/interactivity and warning cause remain unverified.
+ K2 adds narrowly scoped Midnight Inscription native-rank/shared-spent-reconciled
+ bars, subject to complete same-scan guards and review/user validation. This is NOT
+@@ -38,7 +39,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3a review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3b review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -160,7 +161,7 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K3a R5 fixture checkpoints (current; user only AFTER independent review)
++### K3b bounded knowledge jobs (current; user only AFTER independent review)
+ 
+ The historical user **96 passed / 0 failed** is functional assertion evidence only:
+ the accompanying extended lockup and69x execution-limit warning make safe performance
+@@ -172,16 +173,22 @@
+ case42 R5 filter/paging took109.7ms in one unit, wall5860.4ms. The100ms fail-safe correctly
+ stopped it; remaining69 cases did not run. Warning recurrence and actual interactivity
+ were not supplied. K3a adds safe fixture boundaries without removing assertions, reducing
+-37-row stress work or changing the runner/threshold. New native performance is **NOT RUN**.
+-
+-1. **Wait for primary's independent K3a review.** Only after review/primary coordination,
++37-row stress work or changing the runner/threshold. K3a subsequently passed62/111
++with0 failures but stopped at case63's combined maximum-report unit140.4ms,
++wall20823.1ms. No individual constructor/capture/format timings, explicit warning
++recurrence or interactivity evidence was supplied. K3b slices the full512-path setup,
++capture and both real formatting workloads; all old111 assertions/stress remain and
++12 job cases are appended. New123-case execution/native performance is **NOT RUN**.
++
++1. **Wait for primary's independent K3b review.** Only after review/primary coordination,
+    fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
+-   Already on K3: replace **only `CraftArmy/SelfTests.lua`** with the reviewed K3a file.
++   Already on K3a: replace **only `CraftArmy/KnowledgeCheck.lua` and
++   `CraftArmy/SelfTests.lua`** with the reviewed K3b files.
+    Keep **`Commands.lua`**, all K2/other addon files, `CraftArmyDB`, diagnostics and all
+    SavedVariables unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset.
+ 2. Login/reload, then explicitly run **`/ca selftest` out of combat**. It is asynchronous:
+    STARTED reports the actual
+-   total (**111 definitions**, not a promised pass). It executes at most one safe unit
++   total (**123 definitions**, not a promised pass). It executes at most one safe unit
+    per native frame; large stress operations/parameter variants have internal safe
+    boundaries. The game should remain interactive, but this is **not yet measured**.
+    Wait for and report explicit **COMPLETE/INCOMPLETE** counts, elapsed wall/max-unit
+@@ -203,7 +210,43 @@
+    before the K2 current four-bar/hover/unspent comparison resumes. Until then it stays
+    paused. Injected fixtures and fake-frame tests never establish target-client APIs,
+    actual frame scheduling/performance or all-rank costs. `/cad selftest` is separate,
+-   unchanged and not requested again by this correction.
++    unchanged and not requested again by this correction.
++
++#### Read-only job contract (module callers; not a new command)
++
++`KnowledgeCheck.NewCaptureJob(env,runtime,options?)` and
++`NewFormatJob(report,options?)` return jobs with `Step()` / `Cancel(reason?)`,
++`status` (`running`, `complete`, `incomplete`), `completed`, `steps`, `phase` and a
++bounded `label`. `Step` executes at most one unit: metadata, tab currency/root,
++one complete path, per-tab reconciliation, up to **eight format add attempts**
++(including clipped no-ops), or a bounded footer/phase transition. One bounded
++record encode/final concat remains atomic, not preemptible. All collection limits,
++256KiB/4096-line output and4096-byte summary reserve remain unchanged. Collection
++still visits every bounded path after clipping; it never shrinks stress to pass.
++
++Capture owns its private report. Format **borrows caller-owned immutable input until
++terminal**; do not mutate it while stepping. No full-report `Core.Copy` is used.
++Running jobs expose no `report`, `text` or `summary`. Only completed jobs publish
++their result; `completed=true` means work finished, **not** `report.captureComplete=true`.
++Missing APIs, unstable/staged boundaries and clipping still prevent complete data.
++Whole-interval context/config/source/runtime tokens are not refreshed per slice;
++capture time ends at collection finish, and formatting does not requery live context.
++
++Optional plain `options` recognizes only `stepLimit`: integer1..10000, default10000;
++it can only lower the cap. Invalid options, exhaustion and private failures stop
++`incomplete`, with sanitized reason/no results. Cancellation also stops incomplete;
++terminal jobs release their coroutine and its env/runtime/input/buffer references.
++Repeated Step/Cancel are inert. Independent jobs do not share work. No yield crosses
++an API pcall, native operation or temporary namespace override.
++
++Public `Capture` and `Format` remain **synchronous compatibility drains**. Unexpected
++capture failure returns fresh sanitized incomplete evidence rather than partial data;
++unexpected format failure returns a bounded unmistakably incomplete version1 report,
++never a passing prefix. `/ca knowledgecheck` and its copy UI remain synchronous,
++read-only, ephemeral and provisional: this refactor is **not** an asynchronous command
++or a real manual-capture performance guarantee. Commands/K2 accounting/DB/schema and
++diagnostics are unchanged; no profiling/error-handler changes, scans or spending are
++requested here. Native full completion/responsiveness/warning and bar checks stay pending.
+ 
+ ### K2 native-rank bars (historical update; native checklist paused pending safe completion)
+ 
+@@ -211,8 +254,8 @@
+ K1 user **66/66** and complete native report are baseline evidence only. K2 defines
+ **96 cases** (all66 byte-exact retained +30 K2 definitions, including9 review-correction
+ cases). User96/96 assertions now PASS, but lockup/warning blocks performance acceptance.
+-The historical five-file update/selftest instructions below are superseded by K3a's
+-SelfTests-only update/review gate for users already on K3; **do not repeat the old suite**.
++The historical five-file update/selftest instructions below are superseded by K3b's
++two-file update/review gate for users already on K3a; **do not repeat the old suite**.
+ Injected fixtures are not API proof.
+ 
+ K2 corrected static re-review passed; this does not clear the new responsiveness gate.

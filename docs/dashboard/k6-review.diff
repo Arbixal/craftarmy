@@ -1,0 +1,500 @@
+# Primary actual K5 to K6 comparison; local checks recorded separately, no native performance claim.
+# CraftArmy/Core.lua baselineSHA256=36c6a097973c3940e1300e0fbe377c3d141984cd3fbc92a49fa71ae2b7b5706e targetSHA256=50105139dfe727aee52c2f3108a16041a9f2f0928e687a25867a9e13a780b001
+--- K5/CraftArmy/Core.lua
++++ K6/CraftArmy/Core.lua
+@@ -26,22 +26,48 @@
+     return Core.Finite(n) and Core.Finite(lower) and n % 1 == 0 and n >= lower
+ end
+ 
++-- Private to the two whole-walk pcall scopes below. Never use these guards from
++-- an unprotected caller: native exceptions are handled by that walk's boundary.
++-- State belongs to this walk, including when a predicate reenters another walk.
++local function protectedWalkNumbers(valueFailure, keyFailure)
++    local pending
++    local function finite(value, failure)
++        if type(value)~="number" then return false end
++        local library=math
++        if type(library)~="table" then return false end
++        local native=rawget(library,"isfinite")
++        if native~=nil then
++            if type(native)~="function" then return false end
++            pending=failure or valueFailure
++            local result=native(value)
++            pending=nil
++            return type(result)=="boolean" and result
++        end
++        return Core.Finite(value)
++    end
++    local function integer(n)
++        return finite(n,keyFailure) and finite(0,keyFailure) and n % 1 == 0 and n >= 0
++    end
++    return finite, integer, function() return pending end
++end
++
+ -- Both modes walk every occurrence (including aliases), with ancestor-only seen.
+ -- Check-only omits output allocations, never traversal or plain-data guards.
+ local function boundedData(value, makeCopy)
+     local seen, count = {}, 0
++    local finite, integer, pendingFailure = protectedWalkNumbers("invalid/cyclic data", "invalid key")
+     local function copy(v, depth)
+         count = count + 1
+         if count > 50000 or depth > 20 then error("data traversal limit") end
+         local kind = type(v)
+         if kind == "nil" or kind == "boolean" then return v end
+-        if kind == "number" and Core.Finite(v) then return v end
++        if kind == "number" and finite(v) then return v end
+         if kind == "string" and #v <= 4096 then return v end
+         if kind ~= "table" or getmetatable(v) or seen[v] then error("invalid/cyclic data") end
+         seen[v] = true
+         local out = makeCopy and {} or nil
+         for k, x in pairs(v) do
+-            if not ((type(k) == "string" and #k <= 128) or Core.Integer(k, 0)) then
++            if not ((type(k) == "string" and #k <= 128) or integer(k)) then
+                 error("invalid key")
+             end
+             local child = copy(x, depth + 1)
+@@ -55,7 +81,7 @@
+         if makeCopy then return result end
+         return true
+     end
+-    return nil, tostring(result)
++    return nil, pendingFailure() or tostring(result)
+ end
+ 
+ -- Copy only bounded finite, plain data. Never retain caller-owned tables.
+@@ -522,18 +548,19 @@
+ -- of that map, without rewriting aliases of the old character object.
+ local function candidateMirror(db)
+     local memo,count={},0
++    local finite,integer=protectedWalkNumbers("invalid mirror value", "invalid mirror key")
+     local function mirror(value,depth)
+         count=count+1
+         if count>50000 or depth>20 then error("mirror traversal limit") end
+         local kind=type(value)
+         if kind=="nil" or kind=="boolean" then return value end
+-        if kind=="number" and Core.Finite(value) then return value end
++        if kind=="number" and finite(value) then return value end
+         if kind=="string" and #value<=4096 then return value end
+         if kind~="table" or getmetatable(value) then error("invalid mirror value") end
+         if memo[value] then return memo[value] end
+         local out={}; memo[value]=out
+         for key,child in pairs(value) do
+-            if not ((type(key)=="string" and #key<=128) or Core.Integer(key,0)) then error("invalid mirror key") end
++            if not ((type(key)=="string" and #key<=128) or integer(key)) then error("invalid mirror key") end
+             out[key]=mirror(child,depth+1)
+         end
+         return out
+# tests/dashboard.lua baselineSHA256=601990e4a67b4fc3fb048bbf86cb8337974dd3323e771ea20adfcfd18a8edab4 targetSHA256=c6f2349120d5794ba7b4e8ed1e9c8bc68289a5f8c23f88bdcdd708072618de35
+--- K5/tests/dashboard.lua
++++ K6/tests/dashboard.lua
+@@ -8,3 +8,310 @@
+ for _,line in ipairs(result.lines) do print(line) end
+ print(result.passed.." passed; "..result.failed.." failed (pure fixtures only)")
+ if result.failed>0 then os.exit(1) end
++
++-- Standalone-only K6 supplement. No production namespace/runtime/DB is borrowed.
++-- Each Core chunk sees its own math table; the host math/native field is untouched.
++local hostMath, hostNative, hostPcall = math, rawget(math,"isfinite"), pcall
++local supplementChecks=0
++local function check(ok, why)
++    assert(ok, "K6 supplement: "..why)
++    supplementChecks=supplementChecks+1
++end
++local function ieee(n) return n==n and n>-hostMath.huge and n<hostMath.huge end
++local function isolated()
++    local counters={pcalls=0, args={}}
++    local env=setmetatable({}, {__index=function(_,key)
++        if key=="math" then return nil end
++        return _G[key]
++    end})
++    local function reset()
++        local library={}
++        for k,v in pairs(hostMath) do library[k]=v end
++        library.isfinite=nil
++        env.math=library
++        counters.pcalls=0; counters.args={}
++    end
++    env.pcall=function(...)
++        counters.pcalls=counters.pcalls+1
++        return hostPcall(...)
++    end
++    reset()
++    local ns={}
++    local chunk,why=loadfile("CraftArmy/Core.lua")
++    assert(chunk,why); setfenv(chunk,env); chunk("CraftArmy",ns)
++    return ns.Core,env,counters,reset
++end
++
++-- Frozen pre-K6 boundedData BODY, using the SAME isolated Core's public guards.
++-- Only its declaration/return wrapper and function environment are test plumbing.
++local function oldWalker(Core,env)
++    local function boundedData(value, makeCopy)
++        local seen, count = {}, 0
++        local function copy(v, depth)
++            count = count + 1
++            if count > 50000 or depth > 20 then error("data traversal limit") end
++            local kind = type(v)
++            if kind == "nil" or kind == "boolean" then return v end
++            if kind == "number" and Core.Finite(v) then return v end
++            if kind == "string" and #v <= 4096 then return v end
++            if kind ~= "table" or getmetatable(v) or seen[v] then error("invalid/cyclic data") end
++            seen[v] = true
++            local out = makeCopy and {} or nil
++            for k, x in pairs(v) do
++                if not ((type(k) == "string" and #k <= 128) or Core.Integer(k, 0)) then
++                    error("invalid key")
++                end
++                local child = copy(x, depth + 1)
++                if makeCopy then out[k] = child end
++            end
++            seen[v] = nil
++            return out
++        end
++        local ok, result = pcall(copy, value, 0)
++        if ok then
++            if makeCopy then return result end
++            return true
++        end
++        return nil, tostring(result)
++    end
++    setfenv(boundedData,env)
++    return function(value) return boundedData(value,true) end
++end
++
++local function class(why)
++    if why==nil then return nil end
++    for _,name in ipairs({"invalid/cyclic data","invalid key","data traversal limit"}) do
++        if why:find(name,1,true) then return name end
++    end
++    error("unexpected rejection class: "..tostring(why))
++end
++local function equal(a,b)
++    if type(a)~=type(b) then return false end
++    if type(a)=="number" and a~=a and b~=b then return true end
++    if type(a)~="table" then return a==b end
++    for k,v in pairs(a) do if not equal(v,b[k]) then return false end end
++    for k in pairs(b) do if a[k]==nil then return false end end
++    return true
++end
++-- Identity-aware, cycle-safe input snapshot; assertions never copy via new Core.
++local function unchanged(root)
++    local records={}
++    local function visit(v)
++        if type(v)~="table" or records[v] then return end
++        local record={meta=getmetatable(v), entries={}}; records[v]=record
++        for k,x in pairs(v) do record.entries[k]=x; visit(k); visit(x) end
++    end
++    visit(root)
++    return function()
++        for t,r in pairs(records) do
++            check(getmetatable(t)==r.meta,"input metatable unchanged")
++            for k,v in pairs(r.entries) do
++                check(t[k]==v or (type(v)=="number" and v~=v and t[k]~=t[k]),"input value/reference unchanged")
++            end
++            for k in pairs(t) do check(r.entries[k]~=nil,"no input key added") end
++        end
++    end
++end
++local PRIVATE="K6_PRIVATE_NATIVE_PAYLOAD"
++local function install(env,counters,behavior)
++    env.math.isfinite=function(n)
++        local args=counters.args; args[#args+1]=n
++        return behavior(n,#args)
++    end
++end
++local function parity(name,input,setup,expected,expectedArgs)
++    local Core,env,counters,reset=isolated()
++    local oracle=oldWalker(Core,env)
++    local verify=unchanged(input)
++    local function run(copy)
++        reset(); setup(Core,env,counters)
++        local value,why=copy(input)
++        local args={}; for i,n in ipairs(counters.args) do args[i]=n end
++        local calls=counters.pcalls
++        check(not why or not why:find(PRIVATE,1,true),name.." private payload omitted")
++        verify()
++        return value,class(why),args,calls
++    end
++    local value,why,args,calls=run(Core.Copy)
++    local old,oldWhy,oldArgs,oldCalls=run(oracle)
++    check(equal(value,old) and why==oldWhy,name.." frozen oracle value/error parity")
++    check(why==expected,name.." expected rejection/acceptance")
++    check(equal(args,oldArgs),name.." native argument order/count parity")
++    if expectedArgs then check(equal(args,expectedArgs),name.." exact native arguments") end
++    if why==nil then
++        check(equal(value,input),name.." accepted values preserved")
++        if type(input)=="table" then check(value~=input and old~=input,name.." fresh result") end
++    else check(value==nil and old==nil,name.." no partial output") end
++    return value,args,calls,oldCalls
++end
++local function standard(_,env,counters) install(env,counters,ieee) end
++local function behavior(fn)
++    return function(_,env,counters) install(env,counters,fn) end
++end
++
++local shared={answer=7}
++local copied,args,newCalls,oldCalls=parity("normal true/aliases",{[2]=shared,again=shared,flag=false},standard,nil)
++check(copied[2]~=copied.again and copied[2]~=shared and copied.again~=shared,"aliases expanded, not borrowed")
++check(newCalls==1 and oldCalls==1+#args,"outer-only vs outer plus every native guard pcall")
++parity("integer key/lower/value order",{[2]=7},standard,nil,{2,0,7})
++parity("zero value",0,standard,nil,{0})
++parity("false value",false,standard,nil,{})
++parity("nil value",nil,standard,nil,{})
++parity("native false",7,behavior(function() return false end),"invalid/cyclic data",{7})
++parity("NaN",0/0,standard,"invalid/cyclic data")
++parity("positive infinity",hostMath.huge,standard,"invalid/cyclic data",{hostMath.huge})
++parity("negative infinity",-hostMath.huge,standard,"invalid/cyclic data",{-hostMath.huge})
++-- Dispatch parity, not a valid classifier: a present native true is authoritative
++-- even for IEEE host samples, proving no extra fallback comparison was inserted.
++parity("native true authoritative NaN",0/0,behavior(function() return true end),nil)
++parity("native true authoritative infinity",hostMath.huge,behavior(function() return true end),nil,{hostMath.huge})
++parity("absent native",{[2]=7},function() end,nil,{})
++parity("nonfunction native",7,function(_,env) env.math.isfinite=true end,"invalid/cyclic data",{})
++for _,answer in ipairs({0,1,"true",{}}) do
++    parity("nonboolean "..type(answer),7,behavior(function() return answer end),"invalid/cyclic data",{7})
++end
++parity("nil native result",7,behavior(function() return nil end),"invalid/cyclic data",{7})
++for _,library in ipairs({false,42,"math"}) do
++    parity("invalid math "..type(library),7,function(_,env) env.math=library end,"invalid/cyclic data",{})
++end
++parity("nil math",7,function(_,env) env.math=nil end,"invalid/cyclic data",{})
++parity("native rawget not inherited",7,function(_,env)
++    setmetatable(env.math,{__index={isfinite=function() error(PRIVATE) end}})
++end,nil,{})
++parity("reject literal zero",{[2]=7},behavior(function(n) return n~=0 end),"invalid key",{2,0})
++parity("throw value",7,behavior(function() error(PRIVATE) end),"invalid/cyclic data",{7})
++parity("throw key",{[2]=7},behavior(function() error(PRIVATE) end),"invalid key",{2})
++parity("throw lower zero",{[2]=7},behavior(function(n) if n==0 then error(PRIVATE) end return true end),"invalid key",{2,0})
++parity("negative key",{[-2]=7},standard,"invalid key",{-2,0})
++parity("fractional key",{[2.5]=7},standard,"invalid key",{2.5,0})
++parity("bad key type",{[false]=7},standard,"invalid key",{})
++parity("bad value type",function() end,standard,"invalid/cyclic data",{})
++parity("metatable",setmetatable({n=7},{}),standard,"invalid/cyclic data",{})
++local cycle={}; cycle.self=cycle
++parity("cycle",cycle,standard,"invalid/cyclic data",{})
++parity("dynamic native replacement",{[2]=7},function(_,env,counters)
++    install(env,counters,function()
++        env.math.isfinite=function(n) counters.args[#counters.args+1]=n; return false end
++        return true
++    end)
++end,"invalid key",{2,0})
++parity("dynamic math replacement",{[2]=7},function(_,env,counters)
++    install(env,counters,function()
++        env.math={huge=hostMath.huge,isfinite=function(n) counters.args[#counters.args+1]=n; return false end}
++        return true
++    end)
++end,"invalid key",{2,0})
++parity("dynamic native absent",{[2]=7},function(_,env,counters)
++    install(env,counters,function() env.math.isfinite=nil; return true end)
++end,nil,{2})
++parity("dynamic nonboolean normal return",{[2]=7},function(_,env,counters)
++    install(env,counters,function(n,i) if i==2 then return "not boolean" end return true end)
++end,"invalid key",{2,0})
++
++-- One-shot reentry shares only the isolated env, never a walk's pending state.
++-- Save/restore the fake function and counter fields even if the nested call fails.
++for _,outerThrows in ipairs({false,true}) do
++    parity("reentrant walk "..tostring(outerThrows),{[2]=7},function(Core,env,counters)
++        local entered=false
++        install(env,counters,function(n)
++            if not entered then
++                entered=true
++                local savedNative=env.math.isfinite
++                local savedArgs,savedCalls=counters.args,counters.pcalls
++                local ok,why=hostPcall(function()
++                    counters.args={}; counters.pcalls=0
++                    env.math.isfinite=function() error(PRIVATE) end
++                    local v,e=Core.Copy(9)
++                    check(v==nil and class(e)=="invalid/cyclic data" and not e:find(PRIVATE,1,true),"nested Copy exception sanitized")
++                    local db={schema=1,characters={},sentinel=9}
++                    local opened,reason=Core.Open(db)
++                    check(opened==nil and reason=="Invalid saved data; writes disabled (no reset).","nested Open fails closed")
++                end)
++                env.math.isfinite=savedNative
++                counters.args=savedArgs; counters.pcalls=savedCalls
++                assert(ok,why)
++                if outerThrows then error(PRIVATE) end
++            end
++            return ieee(n)
++        end)
++    end,outerThrows and "invalid key" or nil,outerThrows and {2} or {2,0,7})
++end
++
++-- Successful native return must clear pending before an unrelated walk error.
++local Core,env,counters=isolated()
++install(env,counters,ieee)
++local value,why=Core.Copy({[2]=function() end})
++check(value==nil and class(why)=="invalid/cyclic data" and not why:find("invalid key",1,true),"pending key class cleared on normal return")
++
++for _,site in ipairs({"value","key","lower"}) do
++    local C,e,c=isolated()
++    local db={schema=1,characters={}}
++    if site=="value" then db.sentinel=987654321 else db[987654321]=false end
++    local verify=unchanged(db)
++    install(e,c,function(n)
++        if (site~="lower" and n==987654321) or (site=="lower" and n==0) then error(PRIVATE) end
++        return ieee(n)
++    end)
++    local opened,reason=C.Open(db)
++    check(opened==nil and reason=="Invalid saved data; writes disabled (no reset).","Open "..site.." exception sanitized/no partial result")
++    verify()
++end
++
++-- Root sentinel is unrelated to typed fields: visits 1/2/3 are the full Open,
++-- alias-preserving mirror, and final expanded proposal respectively. No spies or
++-- skipped passes; exercise real Apply and verify every original input reference.
++for stage=1,3 do
++    for _,throws in ipairs({false,true}) do
++        local C,e,c=isolated()
++        local character={guid="fixture",name="Fixture",realm="Test"}
++        local identity={skillLineID=2913,parentID=773,profession=13,expansionID=11}
++        local observations={unspent=C.Observation("observed",4,100,"fixture")}
++        local db={schema=1,characters={},sentinel=987654321}
++        local oldCharacters=db.characters
++        local verify=unchanged({db,character,identity,observations})
++        local visits=0
++        install(e,c,function(n)
++            if n==987654321 then
++                visits=visits+1
++                if visits==stage then if throws then error(PRIVATE) end return false end
++            end
++            return ieee(n)
++        end)
++        local applied,reason=C.Apply(db,character,identity,observations,100,"test")
++        local reasons={"Invalid saved data; writes disabled (no reset).",
++            "Bounded saved data mirror unavailable; scan not applied",
++            "Assembled snapshot exceeds bounded saved data limits"}
++        check(applied==nil and reason==reasons[stage],"Apply sentinel stage "..stage.." exact reason/throw="..tostring(throws))
++        check(visits==stage,"Apply reached exact sentinel stage")
++        check(db.characters==oldCharacters and db.characters.fixture==nil,"Apply no commit/reference change")
++        check(not reason:find(PRIVATE,1,true),"Apply native payload omitted")
++        verify()
++    end
++end
++
++-- Mirror integer-key/lower-bound throw coverage: count a unique unrelated root
++-- numeric key, then throw on that key or its immediately following literal zero.
++for _,lower in ipairs({false,true}) do
++    local C,e,c=isolated()
++    local db={schema=1,characters={},[987654321]=false}
++    local oldCharacters=db.characters
++    local verify=unchanged(db)
++    local visits,armed=0,false
++    install(e,c,function(n)
++        if n==987654321 then
++            visits=visits+1
++            if visits==2 then
++                if not lower then error(PRIVATE) end
++                armed=true
++            end
++        elseif n==0 and armed then error(PRIVATE) end
++        return ieee(n)
++    end)
++    local applied,reason=C.Apply(db,{guid="fixture",name="Fixture",realm="Test"},
++        {skillLineID=2913,parentID=773,profession=13,expansionID=11},{},100,"test")
++    check(applied==nil and reason=="Bounded saved data mirror unavailable; scan not applied","mirror key/lower exception sanitized")
++    check(visits==2 and db.characters==oldCharacters and next(oldCharacters)==nil,"mirror key/lower no commit")
++    verify()
++end
++check(math==hostMath and rawget(math,"isfinite")==hostNative,"real host math/native never changed")
++print("K6 isolated supplement: "..supplementChecks.." checks; 0 failed (standalone fake predicates, not native performance/API evidence)")
+# docs/dashboard/README.md baselineSHA256=02978f8d198599d1419636c07e1d5c220cc0368bd211a4018da8857dabced1c0 targetSHA256=84ee999e6b6838866514244f4075f7685f334d7a61e5f8065bd35c6432455d5b
+--- K5/docs/dashboard/README.md
++++ K6/docs/dashboard/README.md
+@@ -1,15 +1,16 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** latest user run stopped **INCOMPLETE,81 passed/0 failed
+-of134**, case81 final Scan unit147.2ms (wall79956.2ms), exceeding the unchanged100ms
+-limit.53 cases remain uncompleted. Measured inner Scan T147.1ms; exclusive O28.4,
+-A37.3,C70.8,K4.1,E6.1,G0.1,B0.1,R0.2ms. Snapshot validation/copying dominates this
+-probe-inclusive injected fixture, not pure Blizzard API latency. Warnings and game
+-interactivity were not reported. K5 removes discarded clone allocations and reuses
+-only private already-validated Apply clones; all graph/typed/scope/atomic guards stay.
+-**K5 awaits independent review and new native validation; no latency PASS is claimed.**
+-**Do not rerun unchanged K4a/K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++**Current selftest paused:** latest K5 user run stopped **INCOMPLETE,81 passed/0 failed
++of149**, case81 final Scan unit103.0ms (wall73689.9ms), exceeding the unchanged100ms
++limit.68 cases remain uncompleted. Measured inner Scan T102.8ms; exclusive O36.5,
++A37.1,C18.2,K4.2,E6.3,G0.2,B0.1,R0.2ms. T improved44.3ms (~30.1%) from147.1ms,
++but safe full completion remains unproven. These are probe-inclusive injected fixture
++measurements, not pure Blizzard API latency. Warnings/interactivity remain unknown.
++K6 removes only nested native-guard pcalls inside two already-protected graph walks;
++every numeric check, literal-zero bound, native call/order and public guard remains.
++**K6 awaits independent review and new native validation; no latency PASS is claimed.**
++**Do not rerun unchanged K5/K4a/K4/K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
+ Historical K3f81/123 stopped at final second-Scan/assert unit122.4ms (wall67041.5ms),
+ with42 uncompleted; it did not measure internal Scan stages either.
+ Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
+@@ -53,7 +54,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K5 review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K6 review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -142,7 +143,10 @@
+ ```
+ 
+ Python checks do not parse or execute Lua. Installed Lua5.1.5 now executes both full
+-suites; see evidence for actual K5 **149/149** and **23/23** results. These isolated fixtures
++suites; see evidence for actual K6 **149/149**, **744 separate isolated supplement checks**,
++and **23/23** results. The supplement loads fresh Core chunks with copied math tables
++and fake predicates, never patches host math, and reports separately from149 cases.
++These isolated fixtures
+ do not establish WoW APIs, native100ms performance, warnings or interactivity.
+ 
+ ### R4 update and retest (user only, after independent review)
+@@ -176,7 +180,48 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K5 Core allocation correction (current; user only AFTER independent review)
++### K6 protected numeric dispatch (current; user only AFTER independent review)
++
++K6 changes **only Core.lua** in the installed addon. The existing whole-walk pcall
++in boundedData and candidateMirror now protects each native finite call directly,
++rather than nesting a pcall for each numeric check. Public Finite/Integer and all
++typed validators remain byte-unchanged. Every key still checks the key AND literal0
++before modulo/bounds; every check rereads math and raw native presence. Native strict
++boolean results, absence fallback and fail-closed behavior remain. Per-walk pending
++failure classes sanitize native exceptions without sharing state across reentry.
++No cache, trusted bypass, check removal, schema change or async scan is introduced.
++
++All **149 SelfTests.lua cases, runner, K4 timing, workloads and assertions are byte-
++unchanged**. Standalone-only tests append after the existing149-case runner: frozen
++pre-K6 walker/public-guard parity, native argument sequences, isolated pcall counts,
++exceptions, dynamic math/native changes, reentry and real Apply mirror/proposal
++failures/no mutation. Local Lua5.1 passes149/149 plus744 separately reported checks
++and diagnostics23/23; none establishes native performance or client API behavior.
++
++1. **Wait for primary's independent K6 review and coordination.** Fully quit WoW and
++   back up `WTF`, including production and diagnostic SavedVariables. Already on K5:
++   replace **only `CraftArmy/Core.lua`** with the reviewed K6 file. Keep the current
++   **SelfTests.lua149**, ALL other modules, `CraftArmyDB`, all SavedVariables and
++   diagnostics unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset.
++2. Login/reload and explicitly run **`/ca selftest` out of combat**. STARTED reports
++   actual count149. Preserve every case/order/workload and the unchanged
++   **100ms/10000-step** limits. No filtering/skipping/reordering/limit raises or
++   automatic resume. Cancellation remains `/ca selftest cancel`.
++3. Share case81's **PASS line containing `scan2`**, or final **INCOMPLETE summary with
++   the scan2-tagged case/unit identity** if slow-stopped. Before81's final step,
++   Scan stages are **NOT MEASURED**, not zero. Share final COMPLETE/INCOMPLETE counts,
++   wall/max-unit timing, case/unit/label, failures, warning recurrence and whether
++   the game remained interactive. Compare **total T against latest102.8ms and initial
++   147.1ms**, and outer **unit against103.0ms and147.2ms**, not a bucket alone.
++4. Report a new stop once; **no unchanged-version rerun**, skip or raised limit.
++   Keep native bars/hover/unspent comparisons paused until primary records satisfactory
++   **safe full completion/performance plus warning/interactivity evidence**.
++
++No local walltime claim, native<100ms guarantee, profiler reset, CVar/error-handler
++change or live-game action is part of this correction. Unchanged K4 measurements
++include probes; wrapper/assertion/runner overhead is outside T but inside the unit.
++
++### K5 Core allocation correction (historical instructions)
+ 
+ K5 changes **only Core.lua and SelfTests.lua** in the installed addon. It uses one
+ identical bounded graph walk in copy/check-only modes: check-only removes output

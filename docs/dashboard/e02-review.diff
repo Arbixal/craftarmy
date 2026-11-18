@@ -1,0 +1,348 @@
+--- before/CraftArmy/Data.lua
++++ after/CraftArmy/Data.lua
+@@ -15,7 +15,23 @@
+     [2913]={parentID=773, profession=13, expansionID=11, provenance="T01 user 70783"},
+     [2909]={parentID=333, profession=9, expansionID=11, provenance="E01 user child-profession query 2026-11-10"},
+ }
+-Data.moxie = { [2913]={id=3261, provenance="T01 user currency query; 70783"} }
++-- Stable internal identifiers, not localized display-name lookup. Supplied entries
++-- stay dormant until the corresponding profession identity is verified; gathering
++-- entries are future reference only, not an expansion of crafting-only support.
++Data.moxieCatalog = {
++    Alchemy={id=3256, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Blacksmithing={id=3257, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Enchanting={id=3258, provenance="User native currency query/UI agreement 2026-11-10"},
++    Engineering={id=3259, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Herbalism={id=3260, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Inscription={id=3261, provenance="T01 user currency query; 70783"},
++    Jewelcrafting={id=3262, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Leatherworking={id=3263, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Mining={id=3264, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Skinning={id=3265, provenance="User-supplied list 2026-11-10; not native-verified"},
++    Tailoring={id=3266, provenance="User-supplied list 2026-11-10; not native-verified"},
++}
++Data.moxie = { [2913]=Data.moxieCatalog.Inscription, [2909]=Data.moxieCatalog.Enchanting }
+ Data.enchants = { [8005]={category="Multicraft", provenance="T01 user ID + typed line; 70783"} }
+ -- Pinned ProfessionsCrafting.xml named Prof0/1ToolSlot and Gear0/1Slot.
+ -- Applied only to slots returned by GetProfessionSlots for this profession.
+--- before/CraftArmy/SelfTests.lua
++++ after/CraftArmy/SelfTests.lua
+@@ -5997,7 +5997,8 @@
+     t.GetConcentrationCurrencyID=function(id) eq(id,s.info.professionID); return 59001 end
+     env.C_CurrencyInfo.GetCurrencyInfo=function(id)
+         s.currencyQueries[id]=(s.currencyQueries[id] or 0)+1
+-        assert(id==59001 or id==3261,"E01 only synthetic concentration or Inscription Moxie query")
++        -- Moxie17 is synthetic, not the user's observed native balance415.
++        assert(id==59001 or id==3261 or id==3258,"E01 only synthetic concentration or mapped Moxie query")
+         return {quantity=id==59001 and 432 or 17,maxQuantity=id==59001 and 1000 or 0}
+     end
+     env.C_ProfSpecs.GetCurrencyInfoForSkillLine=function(id)
+@@ -6034,7 +6035,7 @@
+     eq(map.parentID,773); eq(map.profession,13); eq(map.expansionID,11); eq(map.provenance,"T01 user 70783")
+     local _,s=fixtureAPI(); local id=assert(D.Identity(s.info))
+     eq(id.skillLineID,2913); eq(id.parentID,773); eq(id.profession,13); eq(id.expansionID,11); eq(id.name,"Inscription")
+-    eq(D.moxie[2913].id,3261); eq(D.moxie[2909],nil)
++    eq(D.moxie[2913].id,3261); eq(D.moxie[2909].id,3258)
+     local count=0; for key in pairs(D.expansions) do assert(key==2913 or key==2909); count=count+1 end
+     eq(count,2)
+     for family in pairs(D.families) do
+@@ -6078,11 +6079,23 @@
+     local details=NS.Details.Model(c,{guid=character.guid,id=2909,generation=g.generation,archived=false})
+     eq(details.supported,false); assert(details.status:find("read-only",1,true)); eq(#details.branches,0); verify()
+ end)
+-case("E01 missing Enchanting Moxie mapping never queries3261 invents zero or flags attention",function(checkpoint)
+-    local _,s,c=fixture(); eq(c:Scan(),true)
++case("E01 synthetic missing Moxie mapping never queries mapped currencies invents zero or flags attention",function(checkpoint)
++    local env,s,c=fixture()
++    -- Project this isolated collector's already-guarded Context only. 60009 is an
++    -- explicitly synthetic unmapped skill line; no live/global registry is changed.
++    local collectorContext=c.Context
++    c.Context=function(self)
++        local ctx,why=collectorContext(self)
++        if ctx then ctx.identity=C.Copy(ctx.identity); ctx.identity.skillLineID=60009 end
++        return ctx,why
++    end
++    env.C_TradeSkillUI.GetConcentrationCurrencyID=function(id) eq(id,60009); return 59001 end
++    env.C_ProfSpecs.GetCurrencyInfoForSkillLine=function(id) eq(id,60009); return {numAvailable=7} end
++    eq(D.expansions[60009],nil); eq(D.moxie[60009],nil); eq(c:Scan(),true)
+     for n=1,2 do
+-        local field=active(c).fields.moxie
++        local field=active(c,60009).fields.moxie
+         eq(field.attempt.status,"unsupported"); eq(field.last,nil); eq(s.currencyQueries[3261],nil)
++        eq(s.currencyQueries[3258],nil)
+         noMoxie(row(c,s.at)); eq(#V.Build(c.db,c.fresh,{professionFamily=9,attention="Moxie"},s.at),0)
+         if n==1 then pause(checkpoint,"E01 repeat unsupported Moxie scan"); s.at=110; eq(c:Scan(),true) end
+     end
+@@ -6147,10 +6160,17 @@
+         eq(g.fields[key].last.observedAt,100); eq(g.fields[key].attempt.attemptedAt,110)
+         eq(g.fields[key].attempt.status,status)
+     end
+-    eq(g.fields.moxie.last,nil); eq(g.fields.moxie.attempt.status,"unsupported")
++    eq(g.fields.moxie.last.value.id,3258); eq(g.fields.moxie.last.value.quantity,17)
++    same(g.fields.moxie.last,before.fields.moxie.last)
++    eq(g.fields.moxie.last.observedAt,100); eq(g.fields.moxie.attempt.attemptedAt,110)
++    eq(g.fields.moxie.attempt.status,"error")
+     local r=row(c,110); eq(r.skill.skillLevel,81); eq(r.concentration,432); eq(r.unspent,7)
+     eq(r.skillState.fresh,false); eq(r.skillState.stale,true)
+-    eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100); noMoxie(r)
++    eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100)
++    eq(r.moxie,17); eq(r.cells[I.Moxie],"17")
++    for _,w in ipairs(r.warnings) do assert(w.category~="Moxie","E01 no Moxie attention at17") end
++    local _,ms=V.Field(g,"moxie",c.fresh[character.guid..":2909"])
++    eq(ms.fresh,false); eq(ms.stale,true); eq(ms.observedAt,100)
+     eq(C.Open(c.db),c.db)
+ end)
+ case("E01 reopened saved Enchanting DB renders last observations without session freshness or collection",function(checkpoint)
+@@ -6169,7 +6189,10 @@
+     eq(r.skill.skillLevel,81); eq(r.skill.maxSkillLevel,100); eq(r.concentration,432); eq(r.unspent,7)
+     eq(r.skillState.fresh,false); eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100)
+     eq(r.gear.tool.value.stats.ITEM_MOD_MULTICRAFT_SHORT,152); eq(r.lastUpdated,"30s")
+-    assert(r.snapshot:find("snapshot",1,true)); noMoxie(r)
++    assert(r.snapshot:find("snapshot",1,true)); eq(r.moxie,17); eq(r.cells[I.Moxie],"17")
++    for _,w in ipairs(r.warnings) do assert(w.category~="Moxie","E01 no Moxie attention at17") end
++    local _,state=V.Field(active(fresh),"moxie",fresh.fresh[character.guid..":2909"])
++    eq(state.fresh,false); eq(state.observedAt,100)
+     ui:Refresh(); ui:Render(); eq(next(fresh.fresh),nil); verify(); same(saved,c.db)
+ end)
+ case("E01 Core rejects out of scope native raw payload and active archived generations without mutation",function(checkpoint)
+@@ -6210,6 +6233,194 @@
+ end
+ -- E01 END
+ 
++-- E02 BEGIN: supplied catalogue/mapping regressions. All balances, concentration
++-- IDs and failure scenarios here are synthetic, NOT target-client API evidence.
++do
++local D,V=NS.Data,NS.ViewModel
++local function selectProfession(s,id)
++    local enchanting=id==2909
++    s.info={professionID=id,parentProfessionID=enchanting and 333 or 773,
++        profession=enchanting and 9 or 13,isPrimaryProfession=true,
++        professionName=enchanting and "附魔 synthétique" or "Inscription synthétique",
++        expansionName="Synthetic expansion",sourceCounter=1,
++        skillLevel=81,maxSkillLevel=100,skillModifier=0}
++end
++local function fixture()
++    local env,s=fixtureAPI(); selectProfession(s,2909)
++    s.balances={[3258]=17,[3261]=83}; s.queries={}; s.failure=nil
++    env.GetProfessions=function() return 1,2 end
++    env.GetProfessionInfo=function(index)
++        assert(index==1 or index==2); return "Synthetic primary",0,100,100,0,0,index==1 and 773 or 333
++    end
++    env.C_TradeSkillUI.GetBaseProfessionInfo=function() return {professionID=s.info.parentProfessionID} end
++    env.C_TradeSkillUI.GetProfessionSlots=function(id) eq(id,s.info.profession); return s.slots end
++    env.C_TradeSkillUI.GetConcentrationCurrencyID=function(id)
++        eq(id,s.info.professionID); return id==2909 and 59001 or 50001
++    end
++    env.C_CurrencyInfo.GetCurrencyInfo=function(id)
++        -- A query to ANY dormant catalogue ID (or any unexpected currency) fails.
++        assert(id==3258 or id==3261 or id==59001 or id==50001,"E02 no dormant currency queries")
++        s.queries[id]=(s.queries[id] or 0)+1
++        if id==3258 or id==3261 then
++            eq(id,s.info.professionID==2909 and 3258 or 3261,"E02 profession-specific Moxie")
++            if s.failure then return s.failure() end
++            return {quantity=s.balances[id]}
++        end
++        return {quantity=432,maxQuantity=1000}
++    end
++    env.C_ProfSpecs.GetCurrencyInfoForSkillLine=function(id) eq(id,s.info.professionID); return {numAvailable=7} end
++    return env,s,NS.Collectors.New(env,C.Open(nil))
++end
++local function active(c,id) return c.db.characters[character.guid].professions[id or 2909].active end
++local function row(c,now,id)
++    local rows=V.Build(c.db,c.fresh,{profession=tostring(id or 2909)},now or 100)
++    eq(#rows,1); return rows[1]
++end
++local function state(c,id)
++    id=id or 2909
++    return V.Field(active(c,id),"moxie",c.fresh[character.guid..":"..id])
++end
++local function attention(r,expected,fresh)
++    local n=0
++    for _,w in ipairs(r.warnings) do
++        if w.category=="Moxie" then
++            n=n+1; eq(w.fresh,fresh)
++            assert(w.label:find(fresh and "confirmed " or "last observed ",1,true))
++        end
++    end
++    eq(n,expected and 1 or 0)
++end
++local failures={
++    {name="nil",status="unknown",read=function() return nil end},
++    {name="error",status="error",read=function() error("E02 synthetic failure") end},
++    {name="missing quantity",status="unknown",read=function() return {} end},
++    {name="negative",status="unknown",read=function() return {quantity=-1} end},
++    {name="fraction",status="unknown",read=function() return {quantity=1.5} end},
++    {name="string",status="unknown",read=function() return {quantity="601"} end},
++    {name="NaN",status="unknown",read=function() return {quantity=0/0} end},
++    {name="infinite",status="unknown",read=function() return {quantity=math.huge} end},
++}
++case("E02 exact eleven-entry catalogue provenance unique IDs and unchanged active scope",function()
++    local expected={Alchemy=3256,Blacksmithing=3257,Enchanting=3258,Engineering=3259,
++        Herbalism=3260,Inscription=3261,Jewelcrafting=3262,Leatherworking=3263,
++        Mining=3264,Skinning=3265,Tailoring=3266}
++    local count,seen=0,{}
++    for name,entry in pairs(D.moxieCatalog) do
++        count=count+1; eq(entry.id,expected[name]); eq(seen[entry.id],nil); seen[entry.id]=true
++        local keys=0; for key in pairs(entry) do assert(key=="id" or key=="provenance"); keys=keys+1 end; eq(keys,2)
++        local provenance=name=="Inscription" and "T01 user currency query; 70783" or
++            (name=="Enchanting" and "User native currency query/UI agreement 2026-11-10" or
++            "User-supplied list 2026-11-10; not native-verified")
++        eq(entry.provenance,provenance)
++    end
++    eq(count,11); for name,id in pairs(expected) do eq(D.moxieCatalog[name].id,id) end
++    count=0
++    for id,entry in pairs(D.moxie) do
++        assert(id==2913 or id==2909); count=count+1
++        eq(entry,id==2913 and D.moxieCatalog.Inscription or D.moxieCatalog.Enchanting)
++    end
++    eq(count,2)
++    count=0; for id,map in pairs(D.expansions) do
++        assert(id==2913 or id==2909); count=count+1; eq(map.expansionID,11)
++        eq(map.parentID,id==2913 and 773 or 333); eq(map.profession,id==2913 and 13 or 9)
++        eq(map.provenance,id==2913 and "T01 user 70783" or "E01 user child-profession query 2026-11-10")
++    end; eq(count,2)
++    local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
++        [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription"}
++    count=0; for id,name in pairs(D.families) do eq(name,families[id]); count=count+1 end; eq(count,8)
++    for _,family in ipairs({4,5,6}) do eq(D.families[family],nil) end
++end)
++case("E02 injected Enchanting collector uses3258 dynamic balances zero and strict greater than600",function(checkpoint)
++    local _,s,c=fixture()
++    for n,balance in ipairs({17,0,600,601,29}) do
++        pause(checkpoint,"E02 dynamic balance scan")
++        s.at=100+n; s.balances[3258]=balance; eq(c:Scan(),true)
++        local g=active(c); local f=g.fields.moxie
++        eq(f.attempt.status,"observed"); eq(f.last.value.id,3258); eq(f.last.value.quantity,balance)
++        eq(f.last.observedAt,s.at); eq(f.attempt.attemptedAt,s.at)
++        local value,ms=state(c); eq(value.quantity,balance); eq(ms.fresh,true); eq(ms.stale,false)
++        local r=row(c,s.at); eq(r.moxie,balance)
++        eq(r.cells[I.Moxie],(balance>600 and "|cffffbb00!|r " or "")..tostring(balance))
++        attention(r,balance>600,true)
++        eq(#V.Build(c.db,c.fresh,{profession="2909",attention="Moxie"},s.at),balance>600 and 1 or 0)
++        eq(s.queries[3258],n); eq(s.queries[3261],nil); eq(s.queries[59001],n)
++    end
++end)
++case("E02 nil error invalid Moxie retries preserve last601 and observation time without fresh attention",function(checkpoint)
++    local _,s,c=fixture(); s.balances[3258]=601; eq(c:Scan(),true)
++    local before=C.Copy(active(c).fields.moxie.last)
++    for n,failure in ipairs(failures) do
++        pause(checkpoint,"E02 retained failure "..failure.name)
++        s.at=110+n; s.failure=failure.read; eq(c:Scan(),true)
++        local f=active(c).fields.moxie
++        eq(f.attempt.status,failure.status); eq(f.attempt.attemptedAt,s.at)
++        eq(f.last.value.id,3258); eq(f.last.value.quantity,601); eq(f.last.observedAt,before.observedAt)
++        local _,ms=state(c); eq(ms.known,true); eq(ms.fresh,false); eq(ms.stale,true)
++        local r=row(c,s.at); eq(r.moxie,601); eq(r.cells[I.Moxie],"|cff999999~!|r 601"); attention(r,true,false)
++        eq(s.queries[3261],nil); eq(C.Open(c.db),c.db)
++    end
++    pause(checkpoint,"E02 recover dynamic observed balance")
++    s.failure=nil; s.at=130; s.balances[3258]=42; eq(c:Scan(),true)
++    local value,ms=state(c); eq(value.quantity,42); eq(ms.observedAt,130); eq(ms.fresh,true)
++    attention(row(c,130),false,true)
++end)
++case("E02 first failed Moxie reads remain unknown not zero and never confirmed attention",function(checkpoint)
++    for _,failure in ipairs(failures) do
++        pause(checkpoint,"E02 first failure "..failure.name)
++        local _,s,c=fixture(); s.failure=failure.read; eq(c:Scan(),true)
++        local f=active(c).fields.moxie; eq(f.last,nil); eq(f.attempt.status,failure.status)
++        local value,ms=state(c); eq(value,nil); eq(ms.known,false); eq(ms.fresh,false); eq(ms.observedAt,nil)
++        local r=row(c); eq(r.moxie,nil); eq(r.cells[I.Moxie],"?"); attention(r,false,false)
++        eq(#V.Build(c.db,c.fresh,{profession="2909",attention="Moxie"},100),0)
++        eq(s.queries[3258],1); eq(s.queries[3261],nil)
++    end
++end)
++case("E02 Inscription3261 and Enchanting3258 coexist and isolate dynamic observations",function(checkpoint)
++    local _,s,c=fixture(); selectProfession(s,2913); eq(c:Scan(),true)
++    local inscription=active(c,2913); local verify=unchangedGraph(inscription)
++    local value,ms=state(c,2913); eq(value.id,3261); eq(value.quantity,83); eq(ms.observedAt,100)
++    pause(checkpoint,"E02 switch to Enchanting")
++    selectProfession(s,2909); s.at=110; s.balances[3258]=601; eq(c:Scan(),true); verify()
++    eq(row(c,110,2913).moxie,83); eq(row(c,110).moxie,601)
++    eq(active(c,2913).fields.moxie.last.observedAt,100)
++    local enchanting=active(c); local verifyEnchanting=unchangedGraph(enchanting)
++    pause(checkpoint,"E02 return to Inscription")
++    selectProfession(s,2913); s.at=120; s.balances[3261]=0; eq(c:Scan(),true); verifyEnchanting()
++    eq(row(c,120,2913).moxie,0); eq(row(c,120).moxie,601)
++    eq(active(c).fields.moxie.last.observedAt,110)
++    eq(s.queries[3261],2); eq(s.queries[3258],1); eq(s.queries[50001],2); eq(s.queries[59001],1)
++    eq(#V.Build(c.db,c.fresh,{},120),2)
++end)
++case("E02 closed context high Moxie remains last observed never fresh confirmed attention",function(checkpoint)
++    local _,s,c=fixture(); s.balances[3258]=601; eq(c:Scan(),true)
++    pause(checkpoint,"E02 close native fixture context")
++    s.shown=false; s.at=120; c:Invalidate("E02 synthetic closure")
++    local verify=unchangedGraph(c.db); eq(c:Scan(),false); verify()
++    local value,ms=state(c); eq(value.quantity,601); eq(ms.fresh,false); eq(ms.observedAt,100)
++    local r=row(c,120); eq(r.moxie,601); attention(r,true,false)
++    eq(s.queries[3258],1); eq(s.queries[3261],nil)
++end)
++case("E02 reload and offline dashboard render never query dormant or active currencies",function(checkpoint)
++    local env,s,c=fixture(); s.balances[3258]=601; eq(c:Scan(),true)
++    pause(checkpoint,"E02 reopen saved DB without native reads")
++    local saved=C.Copy(c.db); s.shown=false; s.at=140
++    local function forbidden() error("E02 reload/render must not collect") end
++    for _,api in ipairs({env.C_TradeSkillUI,env.C_ProfSpecs,env.C_Traits,env.C_Item,env.C_CurrencyInfo}) do
++        for key,value in pairs(api) do if type(value)=="function" then api[key]=forbidden end end
++    end
++    local reopened=assert(C.Open(saved)); local fresh=NS.Collectors.New(env,reopened)
++    fresh.Scan=forbidden; fresh.Context=forbidden; fresh.Knowledge=forbidden; fresh.Gear=forbidden
++    local verify=unchangedGraph({saved,fresh.fresh,s.queries})
++    local r=row(fresh,140); eq(r.moxie,601); eq(r.cells[I.Moxie],"|cff999999~!|r 601"); attention(r,true,false)
++    local value,ms=state(fresh); eq(value.id,3258); eq(ms.fresh,false); eq(ms.observedAt,100)
++    mockWidgets(env); local ui=NS.Dashboard.New(env,fresh); ui:Toggle(); eq(#ui.rows,1)
++    eq(ui.rows[1].moxie,601); attention(ui.rows[1],true,false)
++    ui:Refresh(); ui:Render(); eq(next(fresh.fresh),nil); verify()
++    eq(s.queries[3258],1); eq(s.queries[3261],nil)
++end)
++end
++-- E02 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+--- before/docs/dashboard/README.md
++++ after/docs/dashboard/README.md
+@@ -1,6 +1,43 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++
++## E02 — Enchanting Moxie delivered locally; review/native dashboard gate pending
++
++**E02 takes precedence over historical E01 unknown-Moxie/query instructions below.
++No addon update is advised until primary actual-baseline comparison and independent
++read-only review.** The user reports `3258 Artisan Enchanter's Moxie 415`, matching
++native Enchanting (2026-11-10). That verifies the currency mapping, not the newly
++enabled dashboard display; **415 is an observation, never a default balance**.
++
++Only production `Data.lua` changes: `moxieCatalog` retains the11 supplied IDs with
++provenance; numeric active mappings reference only verified identities
++**2913→Inscription3261** and **2909→Enchanting3258**. Other entries remain dormant:
++Alchemy3256, Blacksmithing3257, Engineering3259, Herbalism3260, Jewelcrafting3262,
++Leatherworking3263, Mining3264, Skinning3265, Tailoring3266. These nine are user-supplied
++list data, **not native-validated here**. Gathering stays outside crafting-only scope;
++no new skill-line/family mappings, collector, schema, UI or Knowledge/Details changes.
++Numeric Knowledge remains Inscription-only; Enchanting Details stays unsupported.
++
++Existing collection reads the current balance; zero is observed0, attention is strictly
++**>600** (not600), failures preserve the last value/time or remain unknown on a first
++failure. Stale/offline values are not fresh confirmed attention. Rendering/reload does
++not collect. Future profession onboarding's **initial native dashboard comparison
++includes Moxie**; a separate currency-ID discovery query is no longer the default.
++Dormant IDs activate only after that profession's identity is verified.
++
++Local fixtures: **238/238** (original220 frozen,11 E01 retained with4 authorized
++mapping adaptations/local currency helper,7 new E02), **744 K6 /565 K7** PASS.
++Fixtures do not prove native APIs/UI/latency. Exact final checks/hashes/freeze evidence
++are recorded in [evidence](evidence.md).
++
++After primary comparison/review and separately coordinated update, the only eventual
++focused user check is **3258 Moxie dashboard balance versus native Enchanting after
++one normal ready own-profession scan**. Compare the then-current value, not forced415;
++report mismatch/errors/warnings or unresponsiveness. That check is **pending**, not
++an instruction to update now. Do not repeat E01 cache/reload checks, full native
++selftest or Details refresh. Full native stress remains **INCOMPLETE87/149**;
++broader dashboard/API coverage and publication are separate gates.
+ 
+ ## E01 — focused Enchanting validation complete
+ 

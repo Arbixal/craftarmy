@@ -1,0 +1,906 @@
+# Primary exact pre-U02 to delivered U02 comparison; no Git/staged scope.
+# CraftArmy/Core.lua baseSHA256=cfb993b10e64ed9561d6cecfefbd2b5354e0d32c1c683ce79d4a469a4990607b targetSHA256=63152f75360ee7f035e4c903557675c3ccd8a4903e942af64f1af2193119f7b4
+--- pre-U02/CraftArmy/Core.lua
++++ U02/CraftArmy/Core.lua
+@@ -339,6 +339,8 @@
+         optional(v.entryIDToRanksIncreased,increasedMap)
+ end
+ local function path(v)
++    if type(v)=="table" and v.name~=nil and (type(v.name)~="string" or #v.name>256 or
++        not v.name:match("%S") or v.name:find("[%c|]")) then return false end
+     if type(v)~="table" or not optional(v.node,node) or not optional(v.unlockEntryID,positive) or
+         not optional(v.costRule,label) or not optional(v.costReason,label) or not optional(v.costEvidence,label) or
+         not boolean(v.childrenComplete) or not optional(v.metadataComplete,boolean) or
+# CraftArmy/Collectors.lua baseSHA256=4fa5c2d0817be04c55eada64934f70f680cbc2c6d0a83943cf4411153ac9e60c targetSHA256=c1abaa639809ed2db47b84524512bb967ec573aa225eb8e0b1063c0dc1f79609
+--- pre-U02/CraftArmy/Collectors.lua
++++ U02/CraftArmy/Collectors.lua
+@@ -144,8 +144,28 @@
+     if not knPlain(raw) then return nil,false end
+     local e={}
+     local complete=knNumbers(raw,e,"type maxRanks")
++    local definitionID=rawget(raw,"definitionID")
++    if knInt(definitionID,1) then e.definitionID=definitionID end
+     e.entryCost,e.entryCostComplete=knCosts(rawget(raw,"entryCost"))
+     return e,complete and e.entryCostComplete
++end
++local function knName(value)
++    if type(value)~="string" then return nil end
++    value=value:gsub("[%c|]"," "):match("^%s*(.-)%s*$")
++    if #value>0 and #value<=256 then return value end
++end
++local function knPathName(env,p)
++    local active=p.node and p.node.activeEntry
++    local entry
++    if active and active.entryID==p.unlockEntryID then entry=p.unlock
++    elseif active and active.entryID==p.spendEntryID then entry=p.spend end
++    if not entry or not knInt(entry.definitionID,1) then return nil end
++    local definition=knRead(env,"C_Traits.GetDefinitionInfo",entry.definitionID)
++    if not knPlain(definition) then return nil end
++    local name=knName(rawget(definition,"overrideName"))
++    if name then return name end
++    local spellID=rawget(definition,"spellID")
++    if knInt(spellID,1) then return knName(knRead(env,"C_Spell.GetSpellName",spellID)) end
+ end
+ 
+ function Collectors.New(env, db, changed)
+@@ -350,6 +370,7 @@
+                     p[role],valid=knEntry(env,ctx.config,p[role.."EntryID"])
+                     if not valid then p.metadataComplete=false end
+                 end
++                p.name=knPathName(env,p)
+                 local currencyID=knRead(env,"C_ProfSpecs.GetSpendCurrencyForPath",pathID)
+                 if knInt(currencyID,1) then p.spendCurrencyID=currencyID else p.metadataComplete=false end
+                 p.costs,valid=knCosts(knRead(env,"C_Traits.GetNodeCost",ctx.config,pathID))
+# CraftArmy/ViewModel.lua baseSHA256=e29904163fd6e58d780348ae07d43e9b145d1a29fd4b756ff1698a00005f3abe targetSHA256=19d1860789752ac0a2c4c7b301a06fc51c047701907005dcd2735d2aada5a47f
+--- pre-U02/CraftArmy/ViewModel.lua
++++ U02/CraftArmy/ViewModel.lua
+@@ -145,7 +145,7 @@
+     if not state.known then return "Not observed." end
+     if state.stale then return "Stale: refresh unavailable; last observed "..age.." ago." end
+     if state.fresh then return "Current observation; observed "..age.." ago." end
+-    return "Last observed snapshot; observed "..age.." ago."
++    return "Observed "..age.." ago."
+ end
+ local function bounded(lines)
+     -- Reserve the final line for Dashboard's opt-in hint. Never trim source evidence.
+@@ -208,38 +208,31 @@
+ end
+ local function treeSummary(tree,value,now,archived)
+     local known=value and C.Integer(value.purchased) and C.Integer(value.capacity)
+-    local lines={tree.name==tostring(tree.id) and "Knowledge tree" or tree.name,known and ("Purchased/capacity: "..value.purchased.."/"..value.capacity) or
+-        "Total unknown; complete verified observations required.",freshness(tree.state,now,archived)}
++    local lines,missing={},false
+     if value then
+-        if value.accountingPolicy=="native-rank-reconciled-v1" then
+-            lines[#lines+1]="Future point costs are unverified."
+-        end
+         local byID,seen={},{}
+         for _,p in ipairs(value.paths or {}) do byID[p.id]=p end
+-        local count,missing=0,false
+-        local function visit(id,label,depth)
+-            if seen[id] or depth>64 then return end
++        local function visit(id,depth)
++            if seen[id] or depth>64 or #lines>=64 then return end
+             seen[id]=true
+             local p=byID[id]
+-            if not p then missing=true; return end
+-            count=count+1
+-            if count<=6 then
+-                local availability="availability unknown"
+-                if p.locked==true or (p.node and p.node.isAvailable==false) then availability="locked"
+-                elseif p.node and p.node.isAvailable==true then availability="available" end
+-                local points=C.Integer(p.purchased) and C.Integer(p.capacity) and
+-                    (p.purchased.."/"..p.capacity) or "points unknown"
+-                lines[#lines+1]=label..": "..points.."; "..availability
+-            end
+-            for n,child in ipairs(p.children or {}) do
+-                visit(child,depth==0 and ("Branch "..n) or (label.."."..n),depth+1)
+-            end
+-        end
+-        visit(value.root,"Main branch",0)
+-        if count>6 then lines[#lines+1]=(count-6).." more branches on Shift-hover." end
+-        if missing or count==0 then lines[#lines+1]="Some branch observations are missing." end
+-    end
+-    return bounded(lines)
++            if not p then missing=true; lines[#lines+1]="Unknown branch: ?/?"; return end
++            local name=type(p.name)=="string" and #p.name<=256 and p.name:match("%S") and
++                not p.name:find("[%c|]") and p.name or "Unknown branch"
++            local points=known and C.Integer(p.purchased) and C.Integer(p.capacity) and
++                (p.purchased.."/"..p.capacity) or "?/?"
++            lines[#lines+1]=name..": "..points
++            for _,child in ipairs(p.children or {}) do visit(child,depth+1) end
++        end
++        visit(value.root,0)
++    end
++    if #lines==0 then lines[1]="Unknown branch: ?/?"; missing=true end
++    local footer={}
++    if missing or not known then footer[#footer+1]="Branch observations unavailable." end
++    if archived then footer[#footer+1]="Archived"
++    elseif tree.state.stale then footer[#footer+1]="Stale data" end
++    if #footer>0 then lines[#lines+1]=table.concat(footer," ") end
++    return lines
+ end
+ 
+ function V.Row(guid,c,id,g,session,now,archived)
+@@ -311,6 +304,8 @@
+         tree.tooltip=treeDetail(value,raw,state.observedAt,state)
+         table.insert(tree.tooltip,1,tree.name)
+         tree.summaryTooltip=treeSummary(tree,value,now,archived)
++        tree.aggregateText=value and C.Integer(value.purchased) and C.Integer(value.capacity) and
++            (value.purchased.."/"..value.capacity) or "?/?"
+         row.trees[#row.trees+1]=tree
+     end
+     if progressKnown then row.progressionIncomplete=incomplete end
+@@ -365,8 +360,8 @@
+         freshness(states.knowledgeIndex,now,archived)}
+     if #row.trees==0 then summaries[I.Knowledge][#summaries[I.Knowledge]+1]="Tree observations unavailable." end
+     for _,tree in ipairs(row.trees) do
+-        summaries[I.Knowledge][#summaries[I.Knowledge]+1]=tree.summaryTooltip[1]..": "..
+-            tree.summaryTooltip[2].."; "..freshness(tree.state,now,archived)
++        summaries[I.Knowledge][#summaries[I.Knowledge]+1]=tree.name..": "..
++            tree.aggregateText.."; "..freshness(tree.state,now,archived)
+     end
+     for _,role in ipairs(V.roles) do
+         local gear=row.gear[role]
+# CraftArmy/Dashboard.lua baseSHA256=1a23bb8e7486712d388ec2ee2080107559544ba6daa32c62446eb4294132b8f0 targetSHA256=cdff5b2d4c315830dcbff2c4d34575dcc84194bfcd78222cddfb2dd2659a140d
+--- pre-U02/CraftArmy/Dashboard.lua
++++ U02/CraftArmy/Dashboard.lua
+@@ -75,11 +75,12 @@
+         local ok,down=pcall(env.IsShiftKeyDown)
+         return ok and down==true
+     end
+-    local function focusedTooltip(widget,summary,detail,link)
+-        if diagnostics() then tooltip(widget,detail,link); return end
++    local function focusedTooltip(widget,summary,detail,link,down,noHint)
++        if down==nil then down=diagnostics() end
++        if down then tooltip(widget,detail,link); return end
+         local lines={}
+         for _,line in ipairs(summary or {}) do lines[#lines+1]=line end
+-        if detail and #detail>0 then lines[#lines+1]="Shift-hover for diagnostics." end
++        if not noHint and detail and #detail>0 then lines[#lines+1]="Shift-hover for diagnostics." end
+         tooltip(widget,lines,link)
+     end
+     local function button(parent,label,width,fn)
+@@ -273,11 +274,17 @@
+                 cell.label=text(cell,widths[col]-4); cell.label:SetPoint("LEFT",2,0)
+                 cell:SetScript("OnEnter",function(widget)
+                     local r=w.row; if not r then return end
++                    local down=diagnostics()
++                    if not down and (col==I.Moxie or col==I.Unspent or col==I.LastUpdated or
++                        col==I.Stat or col==I.Enchant) then
++                        if env.GameTooltip then env.GameTooltip:ClearLines(); env.GameTooltip:Hide() end
++                        return
++                    end
+                     local role=roleColumns[col]
+                     local gear=role and r.gear[role] or ((col==I.Stat or col==I.Enchant) and r.gear.tool)
+                     local lines=gear and gear.tooltip or {r.cells[I.Name].."-"..r.cells[I.Realm],r.cells[I.Profession],unpack(r.tooltip)}
+                     local summary=role and gear.summaryTooltip or r.cellTooltips[col]
+-                    focusedTooltip(widget,summary,lines,role and gear.link)
++                    focusedTooltip(widget,summary,lines,role and gear.link,down)
+                 end)
+                 cell:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+                 -- Propagate selection without intercepting tooltip hover.
+@@ -293,7 +300,7 @@
+                 b.label=text(b,53); b.label:SetAllPoints(); b.label:SetJustifyH("CENTER")
+                 b:EnableMouse(true)
+                 b:SetScript("OnEnter",function(widget)
+-                    if b.tree then focusedTooltip(widget,b.tree.summaryTooltip,b.tree.tooltip) end
++                    if b.tree then focusedTooltip(widget,b.tree.summaryTooltip,b.tree.tooltip,nil,nil,true) end
+                 end)
+                 b:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+                 w.bars[n]=b
+# CraftArmy/SelfTests.lua baseSHA256=ef1e484eee884c4d8d60bd50e4b1c44328b3d45b2224f7ebd75cd607bbd971ca targetSHA256=08327b6f6435d6a8bddc7007b6a2466ff2fabf8d8556f95868beca6746009025
+--- pre-U02/CraftArmy/SelfTests.lua
++++ U02/CraftArmy/SelfTests.lua
+@@ -4326,11 +4326,23 @@
+     local first=tip.nativeLink and 3 or 1
+     local text=table.concat(tip.lines,"\n",first)
+     if not shift then
+-        assert(#tip.lines-first+1<=16,"default addon line budget")
++        assert(#tip.lines-first+1<=(widget.tree and 65 or 16),"default addon line budget")
+         for _,part in ipairs({"Raw status:","Generation ","Source pin:","Slot 20","key ITEM_","Shared currency ",
+             "attempted ","scan timestamp ","Path 106","TRADE_SKILL_CLOSE"}) do excludes(text,part) end
+     end
+     return text,widget
++end
++-- U02: these summaries still test model semantics, NOT rendered normal tooltips.
++local function normalSummary(ui,env,col)
++    if col~=I.Moxie and col~=I.Unspent and col~=I.LastUpdated and col~=I.Stat and col~=I.Enchant then
++        return hover(ui,env,col,false)
++    end
++    env.GameTooltip.calls={}
++    eq(hover(ui,env,col,false),""); eq(env.GameTooltip.shown,false)
++    eq(#env.GameTooltip.calls,1); eq(env.GameTooltip.calls[1],"clear")
++    local lines={}
++    for _,line in ipairs(ui.rows[1].cellTooltips[col]) do lines[#lines+1]=NS.Dashboard.PlainTooltip(line) end
++    return table.concat(lines,"\n")
+ end
+ local function stableGraph(root)
+     local records={}
+@@ -4389,7 +4401,7 @@
+     for _,sample in ipairs({{I.Skill,"37/100","Skill modifier: 40","Progression"},
+         {I.Concentration,"Concentration: 950/1000",nil,"Concentration"},
+         {I.Moxie,"Moxie: 601",nil,"Moxie"},{I.Unspent,"Unspent knowledge: 0"}}) do
+-        local normal=hover(ui,env,sample[1],false)
++        local normal=normalSummary(ui,env,sample[1])
+         contains(normal,sample[2]); if sample[3] then contains(normal,sample[3]) end
+         contains(normal,"Current observation; observed 1m ago.")
+         if sample[4] then contains(normal,"Attention: confirmed "..sample[4]) end
+@@ -4399,7 +4411,7 @@
+         local diagnostic=hover(ui,env,sample[1],true)
+         contains(diagnostic,"observed 10; fresh guarded read"); contains(diagnostic,"scan timestamp 10")
+     end
+-    local normal=hover(ui,env,I.LastUpdated,false); contains(normal,"Last scan: 1m ago."); contains(normal,"Current guarded observations.")
++    local normal=normalSummary(ui,env,I.LastUpdated); contains(normal,"Last scan: 1m ago."); contains(normal,"Current guarded observations.")
+     contains(hover(ui,env,I.LastUpdated,true),"scan timestamp 10"); verify()
+ end)
+ case("U01 independent stale saved archived field ages never use attempt or retirement times",function()
+@@ -4408,17 +4420,17 @@
+     assert(C.Apply(c.db,character,identity,{unspent=C.Observation("observed",0,70,"fixture")},70,"fixture"))
+     assert(C.Apply(c.db,character,identity,{moxie=C.Observation("error",nil,80,"fixture","PRIVATE_RAW_FAILURE")},80,"fixture"))
+     s.at=140; c.fresh={[character.guid..":2913"]={generation=1,fields={unspent=true,moxie=true}}}; ui:Refresh()
+-    local text=hover(ui,env,I.Moxie,false)
++    local text=normalSummary(ui,env,I.Moxie)
+     contains(text,"Stale: refresh unavailable; last observed 2m ago."); contains(text,"last observed Moxie")
+     excludes(text,"PRIVATE_RAW_FAILURE"); excludes(text,"Current")
+-    contains(hover(ui,env,I.Unspent,false),"Current observation; observed 1m ago.")
+-    text=hover(ui,env,I.LastUpdated,false); contains(text,"Last scan: 1m ago."); contains(text,"Stale snapshot")
++    contains(normalSummary(ui,env,I.Unspent),"Current observation; observed 1m ago.")
++    text=normalSummary(ui,env,I.LastUpdated); contains(text,"Last scan: 1m ago."); contains(text,"Stale snapshot")
+     text=hover(ui,env,I.Moxie,true); contains(text,"attempted 80; observed 10"); contains(text,"PRIVATE_RAW_FAILURE")
+-    c.fresh={}; ui:Refresh(); contains(hover(ui,env,I.Unspent,false),"Last observed snapshot")
++    c.fresh={}; ui:Refresh(); contains(normalSummary(ui,env,I.Unspent),"Observed 1m ago.")
+     assert(C.Archive(c.db,character.guid,2913,130,"fixture retirement")); ui.options.archived=true; ui:Refresh()
+     local verify=stableGraph({c.db,c.fresh})
+-    text=hover(ui,env,I.Moxie,false); contains(text,"Archived snapshot; last observed 2m ago."); excludes(text,"Attention:")
+-    text=hover(ui,env,I.LastUpdated,false); contains(text,"Last scan: 1m ago."); contains(text,"Archived snapshot.")
++    text=normalSummary(ui,env,I.Moxie); contains(text,"Archived snapshot; last observed 2m ago."); excludes(text,"Attention:")
++    text=normalSummary(ui,env,I.LastUpdated); contains(text,"Last scan: 1m ago."); contains(text,"Archived snapshot.")
+     contains(hover(ui,env,I.Accessory2,false),"Archived snapshot; not observed.")
+     contains(hover(ui,env,I.LastUpdated,true),"Archived 130: fixture retirement"); eq(#ui.rows[1].warnings,0); verify()
+ end)
+@@ -4426,19 +4438,19 @@
+     local ui,env=uiFixture({unspent=0,concentration={id=50001,quantity=0},moxie={id=3261,quantity=0},
+         accessory1={slot=21,role="accessory1",exists=false,metadataReady=false},
+         tool={slot=20,role="tool",exists=true,metadataReady=false,itemID=90020,rank=5}})
+-    contains(hover(ui,env,I.Unspent,false),"Unspent knowledge: 0")
++    contains(normalSummary(ui,env,I.Unspent),"Unspent knowledge: 0")
+     contains(hover(ui,env,I.Concentration,false),"Concentration: 0"); excludes(hover(ui,env,I.Concentration,false),"0/0")
+     contains(hover(ui,env,I.Skill,false),"Not observed")
+     contains(hover(ui,env,I.Accessory1,false),"Empty slot (confirmed)")
+     contains(hover(ui,env,I.Accessory2,false),"Item unknown")
+     local tool=hover(ui,env,I.Tool,false); contains(tool,"Rarity: Unknown"); contains(tool,"Crafted quality: 5")
+-    contains(hover(ui,env,I.Enchant,false),"Enchant unknown; item data unavailable.")
++    contains(normalSummary(ui,env,I.Enchant),"Enchant unknown; item data unavailable.")
+     contains(hover(ui,env,I.Knowledge,false),"Tree observations unavailable.")
+     for _,col in ipairs({I.Skill,I.Accessory1,I.Accessory2,I.Tool,I.Enchant,I.Concentration,I.Moxie,I.Unspent,I.Knowledge}) do
+         assert(#hover(ui,env,col,true)>0)
+     end
+     local unknown,otherEnv=uiFixture({})
+-    contains(hover(unknown,otherEnv,I.Unspent,false),"Not observed."); excludes(hover(unknown,otherEnv,I.Unspent,false),"knowledge: 0")
++    contains(normalSummary(unknown,otherEnv,I.Unspent),"Not observed."); excludes(normalSummary(unknown,otherEnv,I.Unspent),"knowledge: 0")
+ end)
+ case("U01 native gear only preserves third party content order hide and clears stale links",function()
+     local values=payloadFixtures()
+@@ -4454,8 +4466,10 @@
+             eq(tip.nativeLink,values.tool.link); eq(tip.lines[2],"Third-party BIS |A:Native-BIS:12:12|a")
+             for _,nextCol in ipairs({I.Stat,I.Enchant,I.Name}) do
+                 tip.calls={}; local _,widget=hover(ui,env,nextCol,shift)
+-                eq(tip.nativeLink,nil); eq(tip.calls[1],"clear"); eq(tip.calls[2],"owner"); eq(tip.calls[3],"append")
+-                eq(tip.owner,widget); widget.scripts.OnLeave(widget); eq(tip.shown,false)
++                eq(tip.nativeLink,nil); eq(tip.calls[1],"clear")
++                if not shift and nextCol~=I.Name then eq(#tip.calls,1); eq(tip.shown,false)
++                else eq(tip.calls[2],"owner"); eq(tip.calls[3],"append"); eq(tip.owner,widget) end
++                widget.scripts.OnLeave(widget); eq(tip.shown,false)
+             end
+         end
+         hover(ui,env,I.Tool,shift); local header=ui.headers[I.Accessory1]; header.scripts.OnEnter(header)
+@@ -4470,13 +4484,13 @@
+         {leftText="Observed second text",rightText="Observed third text"},{leftText="Observed fourth text"}}
+     local ui,env=uiFixture(values)
+     for _,col in ipairs({I.Tool,I.Stat}) do
+-        local text=hover(ui,env,col,false)
++        local text=normalSummary(ui,env,col)
+         contains(text,"Multicraft: 152"); contains(text,"Resourcefulness: 12"); contains(text,"Unknown stat: 7")
+         contains(text,"Observed totals; base/enchant split unknown."); excludes(text,"ITEM_MOD_PRIVATE_STAT")
+         contains(hover(ui,env,col,true),"key ITEM_MOD_PRIVATE_STAT")
+     end
+     for _,col in ipairs({I.Tool,I.Enchant}) do
+-        local text=hover(ui,env,col,false)
++        local text=normalSummary(ui,env,col)
+         contains(text,"Enchanted: Multicraft; amount/rank unknown."); contains(text,"Enchanted:  Haranir")
+         contains(text,"Observed second text"); contains(text,"2 more enchant text lines on Shift-hover.")
+         excludes(text,"Observed third text"); excludes(text,"8005"); excludes(text,"Rank-3")
+@@ -4494,7 +4508,7 @@
+         elseif mode=="unmapped" then values.tool.enchant={status="observed",present=true,id=9999} end
+         local ui,env,c=uiFixture(values)
+         if mode=="notApplicable" then assert(C.Apply(c.db,character,identity,{tool=C.Observation("not_applicable",nil,20,"fixture")},20,"fixture")); ui:Refresh() end
+-        local text=hover(ui,env,I.Enchant,false)
++        local text=normalSummary(ui,env,I.Enchant)
+         if mode=="known" then contains(text,"Enchanted: Multicraft; amount/rank unknown.")
+         elseif mode=="absent" then contains(text,"No enchant (confirmed)."); contains(text,"Attention: last observed Missing enchant")
+         elseif mode=="empty" or mode=="notApplicable" then contains(text,"No tool; enchant not applicable."); excludes(text,"Attention:")
+@@ -4503,19 +4517,19 @@
+         contains(hover(ui,env,I.Enchant,true),"tool:")
+     end
+ end)
+-case("U01 native tree concise ordinal six branch limit locked capacity caveat full Shift evidence",function()
++case("U01 native tree all individual branches without default prose full Shift evidence",function()
+     local env,_,_,c=k2Fixture(); mockWidgets(env); assert(c:Scan())
+     local ui=NS.Dashboard.New(env,c); ui:Toggle(); local verify=stableGraph({c.db,c.fresh})
+     for n,tree in ipairs(ui.rows[1].trees) do
+         local bar=ui.widgets[1].bars[n]
+         local normal=hover(ui,env,bar,false)
+-        contains(normal,tree.name); contains(normal,"Purchased/capacity: "..tree.purchased.."/"..tree.capacity)
+-        contains(normal,"Future point costs are unverified."); contains(normal,"Main branch:")
+-        local count=0
+-        for _,line in ipairs(env.GameTooltip.lines) do if line:match("^Main branch:") or line:match("^Branch %d") then count=count+1 end end
+-        eq(count,math.min(6,#c.db.characters[character.guid].professions[2913].active.fields["tree:"..tree.id].last.value.paths))
++        excludes(normal,"Purchased/capacity:"); excludes(normal,"Future point costs are unverified.")
++        excludes(normal,"Main branch:"); excludes(normal,"Shift-hover")
++        local paths=c.db.characters[character.guid].professions[2913].active.fields["tree:"..tree.id].last.value.paths
++        eq(#env.GameTooltip.lines,#paths)
++        for i,p in ipairs(paths) do eq(env.GameTooltip.lines[i],"Unknown branch: "..p.purchased.."/"..p.capacity) end
+         if n==1 then
+-            contains(normal,"Branch 1.1: 0/30; locked"); contains(normal,"3 more branches on Shift-hover.")
++            contains(normal,"Unknown branch: 0/30"); eq(#paths,9)
+             excludes(normal,"106192"); excludes(normal,"3902")
+         end
+         local detail=hover(ui,env,bar,true)
+@@ -4536,14 +4550,14 @@
+         knowledgeIndex=C.Observation("observed",{{id=11,name="Current invalid raw label",root=111}},90,"fixture")},90,"fixture"))
+     ui:Refresh(); local verify=stableGraph({c.db,c.fresh})
+     local text=hover(ui,env,ui.widgets[1].bars[1],false)
+-    contains(text,"Last known tree"); contains(text,"Purchased/capacity: 4/10"); contains(text,"Stale: refresh unavailable")
++    eq(ui.rows[1].trees[1].name,"Last known tree"); contains(text,"Unknown branch: 4/10"); contains(text,"Stale data")
+     excludes(text,"29/")
+     excludes(text,"Current invalid raw label"); excludes(text,"PRIVATE_TREE_FAILURE")
+     contains(hover(ui,env,ui.widgets[1].bars[1],true),"PRIVATE_TREE_FAILURE"); verify()
+     values["tree:11"]=nil; values.knowledgeRaw=currentRaw
+     local other,e=uiFixture(values)
+     text=hover(other,e,other.widgets[1].bars[1],false)
+-    contains(text,"Total unknown"); excludes(text,"0/10"); excludes(text,"raw purchased")
++    contains(text,"Unknown branch: ?/?"); contains(text,"Branch observations unavailable."); excludes(text,"0/10"); excludes(text,"raw purchased")
+     contains(hover(other,e,other.widgets[1].bars[1],true),"raw purchased=29")
+ end)
+ case("U01 absent false throwing nonboolean modifier always selects safe concise OnEnter",function()
+@@ -4583,8 +4597,8 @@
+     local ui,env,c,g=uiFixture()
+     local copy=C.Copy(g); copy.scannedAt=nil; copy.fields.unspent.last.observedAt=nil
+     ui.rows={V.Row(character.guid,c.db.characters[character.guid],2913,copy,nil,100,false)}; ui:Render()
+-    local text=hover(ui,env,I.LastUpdated,false); contains(text,"? age"); excludes(text,"0s")
+-    text=hover(ui,env,I.Unspent,false); contains(text,"? age"); excludes(text,"0s")
++    local text=normalSummary(ui,env,I.LastUpdated); contains(text,"? age"); excludes(text,"0s")
++    text=normalSummary(ui,env,I.Unspent); contains(text,"? age"); excludes(text,"0s")
+     contains(hover(ui,env,I.Unspent,true),"observed ?")
+ end)
+ case("U01 all32 observed stat amounts remain within addon line budget without evidence loss",function()
+@@ -4592,7 +4606,7 @@
+     for n=1,32 do values.tool.stats["ITEM_MOD_UNMAPPED_"..n]=1000+n end
+     local ui,env=uiFixture(values)
+     for _,col in ipairs({I.Tool,I.Stat}) do
+-        local text=hover(ui,env,col,false)
++        local text=normalSummary(ui,env,col)
+         for n=1,32 do contains(text,"Unknown stat: "..(1000+n)) end
+         excludes(text,"ITEM_MOD_UNMAPPED_")
+         local diagnostic=hover(ui,env,col,true)
+@@ -4605,20 +4619,414 @@
+     values.knowledgeIndex[1].name=nil; tree.name=nil
+     local ui,env,c,g=uiFixture(values)
+     local text=hover(ui,env,ui.widgets[1].bars[1],false)
+-    contains(text,"Knowledge tree"); contains(text,"Purchased/capacity: 0/0")
+-    contains(text,"Main branch: 0/0; availability unknown")
++    eq(text,"Unknown branch: 0/0"); excludes(text,"availability")
+     excludes(text,"999999"); excludes(text,"unlocked"); excludes(text,"spend-ready")
+     -- A bounded projection-only missing-path input, never inserted into the valid DB.
+     local projection=C.Copy(g); projection.fields["tree:11"].last.value.paths[1].children={999999}
+     ui.rows={V.Row(character.guid,c.db.characters[character.guid],2913,projection,nil,100,false)}; ui:Render()
+-    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Some branch observations are missing."); excludes(text,"999999")
++    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Branch observations unavailable."); excludes(text,"999999")
+     contains(hover(ui,env,ui.widgets[1].bars[1],true),"Missing path 999999")
+     assert(C.Archive(c.db,character.guid,2913,95,"fixture")); ui.options.archived=true; ui:Refresh()
+-    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Archived snapshot; last observed 1m ago.")
++    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Archived"); excludes(text,"last observed")
+     excludes(text,"Current observation"); eq(#ui.rows[1].warnings,0)
+ end)
+ end
+ -- U01 END
++
++-- U02 BEGIN: optional observed labels and real normal/Shift handler regressions.
++do
++local V=NS.ViewModel
++local PRIVATE="U02_PRIVATE_API_PAYLOAD"
++local function has(text,part) assert(text:find(part,1,true),"missing U02 text: "..part.." in "..text) end
++local function lacks(text,part) assert(not text:find(part,1,true),"unexpected U02 text: "..part) end
++local function enter(env,widget,shift)
++    env.IsShiftKeyDown=function() return shift end
++    widget.scripts.OnEnter(widget)
++    return table.concat(env.GameTooltip.lines,"\n")
++end
++local function namedFixture()
++    local env,s,f,c=k2Fixture()
++    for id,e in pairs(f.entries) do e.definitionID=id+500000 end
++    env.C_Traits.GetDefinitionInfo=function(id) return {overrideName="Observed label "..id} end
++    return env,s,f,c
++end
++local function oneName()
++    local env,s,f,c=k2Fixture()
++    f.entries[130942].definitionID=700001
++    return env,s,f,c
++end
++local function numericParity(raw,baseline)
++    local copy=C.Copy(raw)
++    for _,tab in ipairs(copy.tabs) do
++        for _,p in pairs(tab.paths) do
++            p.name=nil
++            if p.unlock then p.unlock.definitionID=nil end
++            if p.spend then p.spend.definitionID=nil end
++        end
++    end
++    assert(deepEqual(copy,baseline),"optional label data cannot change numeric/staging/coverage metadata")
++    eq(raw.nativeComplete,baseline.nativeComplete)
++    local r,b=K.Evaluate(raw),K.Evaluate(baseline)
++    eq(r.complete,b.complete); eq(r.sharedSpent,b.sharedSpent)
++    for i,t in ipairs(r.trees) do
++        eq(t.purchased,b.trees[i].purchased); eq(t.capacity,b.trees[i].capacity)
++        eq(t.complete,b.trees[i].complete)
++    end
++    eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++end
++case("U02 active unlock and spend IDs select existing entries exact arguments no extra entry reads",function()
++    local env,_,f,c=namedFixture()
++    local entries,definitions,spells={},{},0
++    env.C_Traits.GetEntryInfo=function(config,id)
++        eq(config,1001); entries[#entries+1]=id; return f.entries[id]
++    end
++    env.C_Traits.GetDefinitionInfo=function(id)
++        definitions[#definitions+1]=id; return {overrideName="  Observed | label\n"..id.."  ",spellID=800001}
++    end
++    env.C_Spell={GetSpellName=function() spells=spells+1; error("override must win") end}
++    local raw=k2Raw(c); eq(#entries,70); eq(#definitions,35); eq(spells,0)
++    local index=0
++    local function visit(tab,id)
++        index=index+1
++        local p=tab.paths[id]; local active=p.node.activeEntry.entryID
++        eq(entries[index*2-1],p.unlockEntryID); eq(entries[index*2],p.spendEntryID)
++        eq(definitions[index],f.entries[active].definitionID)
++        eq(p.name,"Observed   label "..f.entries[active].definitionID)
++        eq(p.unlock.definitionID,f.entries[p.unlockEntryID].definitionID)
++        eq(p.spend.definitionID,f.entries[p.spendEntryID].definitionID)
++        -- Collection is breadth-first; traversal for expectations follows its queue.
++    end
++    for _,tab in ipairs(raw.tabs) do
++        local queue={tab.root}; local at=1
++        while at<=#queue do
++            local id=queue[at]; at=at+1; visit(tab,id)
++            for _,child in ipairs(tab.paths[id].children) do queue[#queue+1]=child end
++        end
++    end
++    eq(index,35)
++    eq(raw.tabs[1].paths[106192].node.activeEntry.entryID,130942)
++    eq(raw.tabs[2].paths[106280].node.activeEntry.entryID,131037)
++    local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++end)
++case("U02 absent nonmatching or invalid active entry never borrows another definition",function(checkpoint)
++    for _,mode in ipairs({"missing","nonmatching","malformed","missingActiveDefinition"}) do
++        pause(checkpoint,"U02 active label selection")
++        local env,_,f,c=oneName(); f.entries[130933].definitionID=700002
++        if mode=="missing" then f.nodes[106192].activeEntry=nil
++        elseif mode=="nonmatching" then f.nodes[106192].activeEntry={entryID=999999,rank=1}
++        elseif mode=="malformed" then f.nodes[106192].activeEntry={entryID="130942",rank=1}
++        else f.entries[130942].definitionID=nil end
++        local baseline=k2Raw(c); local calls=0
++        env.C_Traits.GetDefinitionInfo=function() calls=calls+1; return {overrideName="Wrong fallback"} end
++        local raw=k2Raw(c); eq(calls,0); eq(raw.tabs[1].paths[106192].name,nil)
++        -- The baseline includes the other optional definition, but no label.
++        baseline.tabs[1].paths[106192].unlock.definitionID=nil
++        baseline.tabs[1].paths[106192].spend.definitionID=nil
++        numericParity(raw,baseline)
++    end
++end)
++case("U02 valid names sanitize controls pipes trim and preserve full localized byte boundaries",function(checkpoint)
++    local samples={{"  Calm Hands  ","Calm Hands"},{"A\000B\127C|D\tE\nF","A B C D E F"},
++        {"Écriture tranquille — 静かな手","Écriture tranquille — 静かな手"},
++        {string.rep("a",256),string.rep("a",256)},{string.rep("é",128),string.rep("é",128)}}
++    for _,sample in ipairs(samples) do
++        pause(checkpoint,"U02 valid name bytes")
++        local env,_,_,c=oneName(); local calls=0
++        env.C_Traits.GetDefinitionInfo=function(id) eq(id,700001); return {overrideName=sample[1],spellID=800001} end
++        env.C_Spell={GetSpellName=function() calls=calls+1; error(PRIVATE) end}
++        local raw=k2Raw(c); eq(raw.tabs[1].paths[106192].name,sample[2]); eq(calls,0)
++        local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++    end
++end)
++case("U02 invalid override falls back once to guarded spell ID and valid localized spell name",function(checkpoint)
++    for _,value in ipairs({{},{value=false},{value=42},{value={}},{value=""},{value=" \t|\n "},
++        {value=string.rep("x",257)},{value=string.rep("é",128).."é"}}) do
++        pause(checkpoint,"U02 spell fallback")
++        local env,_,_,c=oneName(); local definitions,spells=0,0
++        env.C_Traits.GetDefinitionInfo=function(id)
++            definitions=definitions+1; eq(id,700001); return {overrideName=value.value,spellID=800001}
++        end
++        env.C_Spell={GetSpellName=function(id) spells=spells+1; eq(id,800001); return "  静かな手 | Écriture\n " end}
++        local raw=k2Raw(c); eq(raw.tabs[1].paths[106192].name,"静かな手   Écriture")
++        eq(definitions,1); eq(spells,1)
++        local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++    end
++end)
++case("U02 optional definition missing throwing malformed and metatable getters never fail numerics",function(checkpoint)
++    for _,mode in ipairs({"missing","nonfunction","nil","throw","false","number","string","table","metatable"}) do
++        pause(checkpoint,"U02 definition failures")
++        local env,_,_,c=oneName(); local calls,metacalls,spells=0,0,0
++        local function getter()
++            calls=calls+1
++            if mode=="throw" then error(PRIVATE) end
++            if mode=="false" then return false elseif mode=="number" then return 700001
++            elseif mode=="string" then return "name" elseif mode=="table" then return {}
++            elseif mode=="metatable" then return setmetatable({overrideName="Do not trust"},{__index=function() metacalls=metacalls+1; error(PRIVATE) end}) end
++        end
++        env.C_Traits.GetDefinitionInfo=getter
++        if mode=="missing" then env.C_Traits.GetDefinitionInfo=nil elseif mode=="nonfunction" then env.C_Traits.GetDefinitionInfo=true end
++        env.C_Spell={GetSpellName=function() spells=spells+1; error(PRIVATE) end}
++        local raw=k2Raw(c); eq(raw.tabs[1].paths[106192].name,nil); eq(metacalls,0); eq(spells,0)
++        eq(calls,(mode=="missing" or mode=="nonfunction") and 0 or 1)
++        local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++        lacks(c.reason,PRIVATE)
++    end
++end)
++case("U02 optional definition and spell IDs use existing integer bounds without numeric failure",function(checkpoint)
++    for _,field in ipairs({"definitionID","spellID"}) do
++        for _,sample in ipairs({{},{value=0},{value=-1},{value=1.5},{value="700001"},{value=false},
++            {value={}},{value=2147483648},{value=math.huge},{value=0/0}}) do
++            pause(checkpoint,"U02 optional ID guard")
++            local env,_,f,c=oneName(); local calls,spells=0,0
++            if field=="definitionID" then f.entries[130942].definitionID=sample.value end
++            env.C_Traits.GetDefinitionInfo=function(id)
++                calls=calls+1; eq(id,700001); return {spellID=sample.value}
++            end
++            env.C_Spell={GetSpellName=function() spells=spells+1; error(PRIVATE) end}
++            local raw=k2Raw(c); local p=raw.tabs[1].paths[106192]
++            eq(p.name,nil); eq(spells,0); eq(calls,field=="definitionID" and 0 or 1)
++            if field=="definitionID" then eq(p.unlock.definitionID,nil) end
++            local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++        end
++    end
++end)
++case("U02 optional definition and spell ID endpoints accepted with no numeric labels",function()
++    for _,id in ipairs({1,2147483647}) do
++        local env,_,f,c=oneName(); f.entries[130942].definitionID=id
++        local definitions,spells=0,0
++        env.C_Traits.GetDefinitionInfo=function(arg) definitions=definitions+1; eq(arg,id); return {overrideName=id,spellID=id} end
++        env.C_Spell={GetSpellName=function(arg) spells=spells+1; eq(arg,id); return "Observed endpoint label" end}
++        local raw=k2Raw(c); eq(raw.tabs[1].paths[106192].name,"Observed endpoint label"); eq(definitions,1); eq(spells,1)
++        local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++    end
++end)
++case("U02 spell getter missing nil throwing malformed blank long values leave only label absent",function(checkpoint)
++    for _,mode in ipairs({"namespace","missing","nonfunction","nil","throw","false","number","table","blank","controls","long","utfLong","max","utfMax"}) do
++        pause(checkpoint,"U02 spell name failures")
++        local env,_,_,c=oneName(); local calls=0
++        env.C_Traits.GetDefinitionInfo=function() return {spellID=800001} end
++        env.C_Spell={GetSpellName=function(id)
++            calls=calls+1; eq(id,800001)
++            if mode=="throw" then error(PRIVATE) elseif mode=="false" then return false
++            elseif mode=="number" then return 800001 elseif mode=="table" then return {}
++            elseif mode=="blank" then return "  " elseif mode=="controls" then return "\000|\127\n"
++            elseif mode=="long" then return string.rep("a",257) elseif mode=="utfLong" then return string.rep("é",129)
++            elseif mode=="max" then return string.rep("a",256) elseif mode=="utfMax" then return string.rep("é",128) end
++        end}
++        if mode=="namespace" then env.C_Spell=nil elseif mode=="missing" then env.C_Spell.GetSpellName=nil
++        elseif mode=="nonfunction" then env.C_Spell.GetSpellName=true end
++        local raw=k2Raw(c); local expected
++        if mode=="max" then expected=string.rep("a",256) elseif mode=="utfMax" then expected=string.rep("é",128) end
++        eq(raw.tabs[1].paths[106192].name,expected)
++        eq(calls,(mode=="namespace" or mode=="missing" or mode=="nonfunction") and 0 or 1)
++        local _,_,_,plain=k2Fixture(); numericParity(raw,k2Raw(plain))
++        local db=C.Open(nil); local r=K.Evaluate(raw)
++        assert(C.Apply(db,character,identity,k2Observations(raw,r,100),100,"fixture"))
++        eq(C.Open(db),db); lacks(c.reason,PRIVATE)
++    end
++end)
++case("U02 optional name calls bounded to one definition and spell per 64 paths and eight trees",function()
++    local env,_,f,c=oneName(); local template=C.Copy(f.nodes[106192]); f.tabs={}
++    for t=1,8 do
++        f.tabs[t]={id=8000+t,root=600000+t*1000+1}
++        f.currencies[8000+t]={{traitCurrencyID=3902,quantity=0,spent=0}}
++        for i=1,64 do
++            local id=600000+t*1000+i; local n=C.Copy(template); n.ID=id; f.nodes[id]=n
++            f.unlock[id]=130942; f.spend[id]=130933; f.currency[id]=3902; f.costs[id]={{ID=3902,amount=1}}
++            f.children[id]=i<64 and {id+1} or {}
++        end
++    end
++    env.C_ProfSpecs.GetRootPathForTab=function(id) return f.tabs[id-8000].root end
++    local entries,definitions,spells=0,0,0
++    env.C_Traits.GetEntryInfo=function(config,id) eq(config,1001); entries=entries+1; return f.entries[id] end
++    env.C_Traits.GetDefinitionInfo=function(id) eq(id,700001); definitions=definitions+1; return {spellID=800001} end
++    env.C_Spell={GetSpellName=function(id) eq(id,800001); spells=spells+1; return "Captured branch" end}
++    local raw=k2Raw(c); eq(#raw.tabs,8); eq(raw.nativeComplete,true)
++    for _,tab in ipairs(raw.tabs) do
++        local count=0; for _,p in pairs(tab.paths) do count=count+1; eq(p.name,"Captured branch"); eq(p.metadataComplete,true) end
++        eq(count,64); eq(tab.coverageComplete,true)
++    end
++    eq(entries,1024); eq(definitions,512); eq(spells,512)
++end)
++case("U02 Core optional name rejection is atomic raw and tree old nameless snapshots stay valid",function(checkpoint)
++    local db,g=dbWith(payloadFixtures()); eq(C.Open(db),db); local verify=unchangedGraph(db)
++    for _,key in ipairs({"knowledgeRaw","tree:11"}) do
++        for _,sample in ipairs({{value=""},{value=" \t "},{value="a|b"},{value="a\000b"},{value="a\127b"},
++            {value=string.rep("a",257)},{value=string.rep("é",129)},{value=123},{value=false},{value={}}}) do
++            pause(checkpoint,"U02 atomic name validator")
++            local value=C.Copy(payloadFixtures()[key]); local p=key=="knowledgeRaw" and value.tabs[1].paths[72] or value.paths[1]
++            p.name=sample.value
++            eq(C.ValidPayload(key,value,"observed"),false)
++            eq(C.Apply(db,character,identity,{[key]=C.Observation("observed",value,20,"fixture"),
++                unspent=C.Observation("observed",9,20,"fixture")},20,"fixture"),nil); verify()
++            local bad=C.Copy(db); local last=bad.characters[character.guid].professions[2913].active.fields[key].last
++            last.value=value; local checkBad=unchangedGraph(bad); eq(C.Open(bad),nil); checkBad()
++            local archived=C.Copy(db); assert(C.Archive(archived,character.guid,2913,30,"fixture"))
++            archived.characters[character.guid].professions[2913].archives[1].fields[key].last.value=value
++            local checkArchive=unchangedGraph(archived); eq(C.Open(archived),nil); checkArchive()
++        end
++        for _,name in ipairs({"Branch",string.rep("a",256),string.rep("é",128)}) do
++            local value=C.Copy(payloadFixtures()[key]); local p=key=="knowledgeRaw" and value.tabs[1].paths[72] or value.paths[1]
++            p.name=name; eq(C.ValidPayload(key,value,"observed"),true)
++        end
++    end
++    eq(g.fields["tree:11"].last.value.paths[1].name,nil); verify()
++end)
++case("U02 real Copy Evaluate Apply Open reload and archive preserve names and independent ownership",function()
++    local _,_,_,c=namedFixture(); local raw=k2Raw(c); local copy=C.Copy(raw)
++    local r=K.Evaluate(raw); eq(r.complete,true)
++    local original=raw.tabs[1].paths[106192].name
++    eq(copy.tabs[1].paths[106192].name,original); assert(copy.tabs[1].paths[106192]~=raw.tabs[1].paths[106192])
++    local db=C.Open(nil); local obs=k2Observations(raw,r,100)
++    local returned=assert(C.Apply(db,character,identity,obs,100,"fixture"))
++    local saved=db.characters[character.guid].professions[2913].active
++    eq(returned,saved); local returnedCopy=C.Copy(returned)
++    eq(saved.fields["tree:1122"].last.value.paths[1].name,original)
++    raw.tabs[1].paths[106192].name="caller raw"; r.trees[1].paths[1].name="caller evaluated"
++    copy.tabs[1].paths[106192].name="caller copied"; returnedCopy.fields["tree:1122"].last.value.paths[1].name="caller returned copy"
++    eq(saved.fields["tree:1122"].last.value.paths[1].name,original)
++    eq(saved.fields.knowledgeRaw.last.value.tabs[1].paths[106192].name,original)
++    local reloaded=C.Copy(db); eq(C.Open(reloaded),reloaded)
++    reloaded.characters[character.guid].professions[2913].active.fields["tree:1122"].last.value.paths[1].name="other DB"
++    eq(saved.fields["tree:1122"].last.value.paths[1].name,original)
++    assert(C.Archive(db,character.guid,2913,120,"fixture")); eq(C.Open(db),db)
++    local archive=db.characters[character.guid].professions[2913].archives[1]
++    eq(archive.fields["tree:1122"].last.value.paths[1].name,original)
++    local archiveCopy=C.Copy(archive); archiveCopy.fields["tree:1122"].last.value.paths[1].name="copy"
++    eq(archive.fields["tree:1122"].last.value.paths[1].name,original)
++end)
++case("U02 failed numeric refresh retains coherent old names points not latest raw labels",function(checkpoint)
++    local env,s,f,c=namedFixture(); mockWidgets(env); assert(c:Scan())
++    pause(checkpoint,"U02 named snapshot collected")
++    local before=C.Copy(c.db.characters[character.guid].professions[2913].active.fields["tree:1122"].last)
++    env.C_Traits.GetDefinitionInfo=function() return {overrideName="New raw invalid label"} end
++    f.nodes[106192].ranksPurchased=29; s.at=120; assert(c:Scan())
++    local g=c.db.characters[character.guid].professions[2913].active
++    assert(deepEqual(g.fields["tree:1122"].last,before)); eq(g.fields["tree:1122"].attempt.status,"unknown")
++    eq(g.fields.knowledgeRaw.last.value.tabs[1].paths[106192].name,"New raw invalid label")
++    local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    local text=enter(env,ui.widgets[1].bars[1],false)
++    has(text,before.value.paths[1].name..": 0/30"); has(text,"Stale data"); lacks(text,"New raw invalid label"); lacks(text,"29/")
++    eq(ui.rows[1].trees[1].purchased,0); eq(ui.rows[1].trees[1].capacity,270)
++    local diagnostic=enter(env,ui.widgets[1].bars[1],true)
++    has(diagnostic,"NOT verified future/all-rank costs"); has(diagnostic,"Observed tree at 100")
++end)
++case("U02 label only refresh failure is fresh numerics Unknown branch without history fallback",function(checkpoint)
++    local env,s,_,c=namedFixture(); mockWidgets(env); assert(c:Scan())
++    pause(checkpoint,"U02 label-only retry")
++    env.C_Traits.GetDefinitionInfo=function() error(PRIVATE) end
++    s.at=120; assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
++    local t=g.fields["tree:1122"]; eq(t.attempt.status,"observed"); eq(t.last.observedAt,120)
++    eq(t.last.value.paths[1].name,nil); eq(t.last.value.purchased,0); eq(t.last.value.capacity,270)
++    local ui=NS.Dashboard.New(env,c); ui:Toggle(); eq(ui.rows[1].trees[1].state.fresh,true)
++    local text=enter(env,ui.widgets[1].bars[1],false); has(text,"Unknown branch: 0/30"); lacks(text,"Stale"); lacks(text,"Observed label")
++    lacks(text,PRIVATE); lacks(c.reason,PRIVATE)
++end)
++case("U02 real named localized duplicate branches individual points full traversal and legacy diagnostics",function()
++    local env,_,_,c=namedFixture(); mockWidgets(env)
++    env.C_Traits.GetDefinitionInfo=function(id)
++        return {overrideName=(id==630942 or id==630941) and "静かな手" or "Écriture tranquille"}
++    end
++    assert(c:Scan()); local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    local g=c.db.characters[character.guid].professions[2913].active
++    local verify=unchangedGraph({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB})
++    for i,tree in ipairs(ui.rows[1].trees) do
++        local value=g.fields["tree:"..tree.id].last.value
++        local text=enter(env,ui.widgets[1].bars[i],false); eq(#env.GameTooltip.lines,#value.paths)
++        for n,p in ipairs(value.paths) do eq(env.GameTooltip.lines[n],p.name..": "..p.purchased.."/"..p.capacity) end
++        for _,prose in ipairs({"Purchased/capacity","Future point","observed","Shift-hover","locked","available",tree.name,"Source pin","Path "}) do lacks(text,prose) end
++        if i==1 then eq(#env.GameTooltip.lines,9); eq(env.GameTooltip.lines[1],"静かな手: 0/30"); eq(env.GameTooltip.lines[2],"静かな手: 0/30") end
++        if i==2 then eq(env.GameTooltip.lines[1],"Écriture tranquille: 10/10"); eq(tree.purchased,50); eq(tree.capacity,70) end
++        local diagnostic=enter(env,ui.widgets[1].bars[i],true)
++        has(diagnostic,"Native rank points / shared-spent reconciled; NOT verified future/all-rank costs")
++        has(diagnostic,"Source pin: 297d7"); has(diagnostic,"Tree purchased/capacity: "..value.purchased.."/"..value.capacity)
++    end
++    local overview=enter(env,ui.widgets[1].cells[I.Knowledge],false)
++    has(overview,ui.rows[1].trees[2].name..": 50/70"); lacks(overview,"Last observed snapshot")
++    verify()
++end)
++case("U02 all64 default paths unknown labels totals and single stale archive exception footer",function()
++    local values=payloadFixtures(); local t=values["tree:11"]; local template=C.Copy(t.paths[1]); t.paths={}
++    t.root=1001; t.purchased=0; t.capacity=64; t.coverage={discovered=64,captured=64,limit=false}
++    for n=1,64 do
++        local p=C.Copy(template); p.id=1000+n; p.purchased=0; p.capacity=1; p.name="静かな手 "..n
++        p.children=n<64 and {1001+n} or {}; t.paths[n]=p
++    end
++    t.paths[2].name=nil; values.knowledgeIndex[1].root=t.root
++    local db,g=dbWith(values); local env=fixtureAPI(); mockWidgets(env)
++    local c=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    local text=enter(env,ui.widgets[1].bars[1],false); eq(#env.GameTooltip.lines,64)
++    eq(env.GameTooltip.lines[1],"静かな手 1: 0/1"); eq(env.GameTooltip.lines[2],"Unknown branch: 0/1")
++    eq(env.GameTooltip.lines[64],"静かな手 64: 0/1"); lacks(text,"observed"); lacks(text,"Shift-hover")
++    assert(C.Apply(db,character,identity,{["tree:11"]=C.Observation("error",nil,110,"fixture")},110,"fixture"))
++    ui:Refresh(); enter(env,ui.widgets[1].bars[1],false); eq(#env.GameTooltip.lines,65); eq(env.GameTooltip.lines[65],"Stale data")
++    assert(C.Archive(db,character.guid,2913,120,"fixture")); ui.options.archived=true; ui:Refresh()
++    enter(env,ui.widgets[1].bars[1],false); eq(#env.GameTooltip.lines,65); eq(env.GameTooltip.lines[65],"Archived")
++    -- Pure projection with no eligible last tree; never borrow raw ranks or labels.
++    local projection=C.Copy(g); projection.fields["tree:11"].last=nil
++    projection.fields.knowledgeRaw.last.value.tabs[1].paths[72].name="Ineligible raw label"
++    ui.rows={V.Row(character.guid,db.characters[character.guid],2913,projection,nil,130,false)}; ui:Render()
++    text=enter(env,ui.widgets[1].bars[1],false)
++    eq(text,"Unknown branch: ?/?\nBranch observations unavailable."); lacks(text,"0/64"); lacks(text,"Ineligible raw label")
++end)
++case("U02 five silent normal cells clear hide existing gear then exact Shift diagnostic selection leave",function()
++    local env=fixtureAPI(); mockWidgets(env); local db=dbWith(payloadFixtures())
++    local c=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,c); ui:Toggle(); local tip=env.GameTooltip
++    local counts={}; local functions={}
++    for _,key in ipairs({"ClearLines","Hide","SetOwner","AddLine","Show","SetHyperlink"}) do
++        local original=tip[key]; functions[key]=original
++        tip[key]=function(self,...) counts[key]=(counts[key] or 0)+1; return original(self,...) end
++    end
++    local verify=unchangedGraph({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB})
++    for _,col in ipairs({I.Moxie,I.Unspent,I.LastUpdated,I.Stat,I.Enchant}) do
++        local cell=ui.widgets[1].cells[col]
++        enter(env,ui.widgets[1].cells[I.Tool],false); eq(tip.shown,true); assert(tip.nativeLink)
++        local owner=tip.owner; counts={}; local modifiers=0
++        env.IsShiftKeyDown=function() modifiers=modifiers+1; return false end
++        cell.scripts.OnEnter(cell); eq(modifiers,1); eq(tip.shown,false); eq(tip.nativeLink,nil); eq(#tip.lines,0)
++        eq(counts.ClearLines,1); eq(counts.Hide,1); eq(counts.SetOwner,nil); eq(counts.AddLine,nil); eq(counts.Show,nil); eq(counts.SetHyperlink,nil); eq(tip.owner,owner)
++        counts={}; modifiers=0
++        env.IsShiftKeyDown=function() modifiers=modifiers+1; return modifiers==1 end
++        cell.scripts.OnEnter(cell); eq(modifiers,1); eq(counts.SetOwner,1); eq(counts.Show,1); eq(counts.SetHyperlink,nil)
++        local r=ui.rows[1]; local expected=(col==I.Stat or col==I.Enchant) and C.Copy(r.gear.tool.tooltip) or
++            {r.cells[I.Name].."-"..r.cells[I.Realm],r.cells[I.Profession],unpack(r.tooltip)}
++        for n,line in ipairs(expected) do expected[n]=NS.Dashboard.PlainTooltip(line) end
++        assert(deepEqual(tip.lines,expected),"exact existing diagnostic array for column "..col)
++        eq(tip.owner,cell); eq(tip.shown,true); cell.scripts.OnLeave(cell); eq(tip.shown,false)
++        eq(cell.style.EnableMouse[1],true); cell.scripts.OnMouseDown(cell); eq(ui.selected,ui.widgets[1].row)
++    end
++    verify()
++end)
++case("U02 protected modifier fallbacks sampled once silent five normal cells no collection or mutation",function()
++    local env=fixtureAPI(); mockWidgets(env); local db=dbWith(payloadFixtures())
++    local c=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,c); ui:Toggle()
++    local reads=0
++    local function forbidden() reads=reads+1; error(PRIVATE) end
++    for _,namespace in ipairs({env.C_Traits,env.C_ProfSpecs,env.C_Item}) do for key in pairs(namespace) do namespace[key]=forbidden end end
++    env.C_Spell={GetSpellName=forbidden}; c.Knowledge=forbidden; c.Scan=forbidden
++    local verify=unchangedGraph({c.db,c.fresh,ui.rows,env.CraftArmyDiagnosticsDB})
++    for _,col in ipairs({I.Moxie,I.Unspent,I.LastUpdated,I.Stat,I.Enchant}) do
++        local cell=ui.widgets[1].cells[col]
++        for _,mode in ipairs({"absent","noncallable","false","nil","throw","number","string","table"}) do
++            enter(env,ui.widgets[1].cells[I.Tool],false)
++            local calls=0
++            env.IsShiftKeyDown=function()
++                calls=calls+1
++                if mode=="throw" then error(PRIVATE) elseif mode=="false" then return false
++                elseif mode=="number" then return 1 elseif mode=="string" then return "true" elseif mode=="table" then return {} end
++            end
++            if mode=="absent" then env.IsShiftKeyDown=nil elseif mode=="noncallable" then env.IsShiftKeyDown=true end
++            env.GameTooltip.calls={}; cell.scripts.OnEnter(cell)
++            eq(calls,(mode=="absent" or mode=="noncallable") and 0 or 1)
++            eq(env.GameTooltip.shown,false); eq(#env.GameTooltip.lines,0); eq(env.GameTooltip.nativeLink,nil)
++            eq(#env.GameTooltip.calls,1); eq(env.GameTooltip.calls[1],"clear")
++        end
++        enter(env,cell,true); has(table.concat(env.GameTooltip.lines,"\n"),"observed 10")
++    end
++    eq(reads,0); verify()
++end)
++end
++-- U02 END
+ 
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+# docs/dashboard/README.md baseSHA256=a2be5c7cf08ddc3b76072c7f2ee741d66b5a153b845c108773a918dd4954c3dd targetSHA256=f4dc22b970bc64727dd38c4ddeb465acbfd04c3848303d2c3ec0ed5bf39f9c91
+--- pre-U02/docs/dashboard/README.md
++++ U02/docs/dashboard/README.md
+@@ -2,45 +2,52 @@
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+ 
+-## U01 — concise normal hover; Shift-hover diagnostics (native check pending)
+-
+-Normal hovers now explain only the hovered field: full identities, observed skill/
+-modifier, currencies/unspent, gear quality/rarity, full tool stat amounts and enchant
+-information. Last Updated explains scan age and independent field observation times.
+-Saved, stale, unknown, confirmed empty and archived states remain distinct; displaying
+-a saved snapshot never makes it fresh. Tree hovers show purchased/capacity, up to six
+-ordinal branches (not invented names), known locks and the caveat **Future point costs
+-are unverified.** Extra branches and technical evidence remain on Shift-hover.
+-
+-**Hold Shift BEFORE entering the cell/bar/status hover** for the existing full diagnostic
+-view, including exact field times, raw reasons/IDs, reconciliation and source pins.
+-Changing Shift while already hovering does not require an immediate tooltip update;
+-leave and enter again. Native item/third-party tooltips remain on A1/A2/Tool only;
+-Stat and Enchant use focused summaries normally and full tool evidence on Shift,
+-without native hyperlinks in either mode.
+-Observed stat totals are not split into base/enchant amounts. Enchant rank/amount is
+-not inferred from category or tool quality. Missing modifier support safely stays concise.
+-
+-Local U01 delivery has **164/164 addon cases (149 retained +15 new)**, plus744 K6 and565
+-K7 checks; diagnostic23/23 also passes. Local mocks do not validate WoW UI/APIs or timing.
+-**Primary comparison and independent read-only static review PASS (2026-11-08).**
+-The scoped user update is ONLY
+-`CraftArmy/ViewModel.lua`, `CraftArmy/Dashboard.lua`, `CraftArmy/SelfTests.lua` after quitting
+-and backing up. SelfTests carries new regression definitions, **not a request to rerun the
+-full native suite**. Preserve all other modules, SavedVariables and diagnostics.
+-
+-Primary requests one concise focused usability check from existing
+-snapshots: normal then Shift-before-hover on a numeric field, Last Updated, Tool/Stat/
+-Enchant, a tree and status. Confirm readability, full stat amounts, truthful unknown/
+-stale context where available, and unchanged native/third-party gear content. Report
+-errors or misleading text; do not reset data, perform gameplay actions, restart V01,
+-collect large dumps or chase case88 timing. Native U01 readability/Shift behavior remains
+-NOT RUN; broader T02/mappings/semantics/guides are not accepted.
++## U02 — named branch-only tree hover; five silent normal value cells
++
++Normal tree hovers show **every captured path**, including the root and locked branches,
++as `Name: purchased/capacity` using that individual path's points, not the whole-tree
++aggregate. No routine heading, accounting caveat, age prose or Shift hint is appended.
++Actual stale/archived states get a short footer; missing observations stay unknown.
++Names come from the observed active entry's definition override name or spell name during
++the guarded scan, never on hover/offline. Unavailable names say `Unknown branch`.
++This optional metadata is schema1 backward-compatible: old nameless snapshots remain
++valid. Name failures do not change numeric eligibility or borrow labels from history.
++
++**Moxie, Unspent KP, Last Updated, Stat and Enchant value cells have no normal tooltip.**
++Their header hovers and selection still work. Hold **Shift BEFORE entering** any cell/bar/
++status hover for the original full diagnostics, including exact observation times, raw
++IDs/reasons, reconciliation and future-cost caveats. Leave and re-enter to change modes.
++Missing/throwing/nonboolean modifier support safely selects normal behavior (silent on
++those five cells). Native item/third-party tooltips remain on A1/A2/Tool only; Stat and
++Enchant Shift hovers show full tool evidence without native hyperlinks. Tool normal
++hover still includes observed stat amounts/enchant detail, not an inferred base/enchant
++split or enchant rank/amount. Table values, attention rules and saved ages are unchanged.
++
++U01 user feedback confirms improved tooltips and a normal/Shift difference; it does
++**not** verify U02 names or silence. **U02 independent review and native checks pending.**
++Local checks pass: **181/181 addon cases** (149 retained +15 adapted U01 +17 new U02),
++744 K6/565 K7 checks, diagnostic23/23 and both Python structural checks. Injected fixtures
++are not evidence of target-client API behavior, native timing or wrapped readability.
++Do not update until the primary has compared/reviewed the exact frozen delivery.
++After review only, quit WoW, back up SavedVariables, and update ONLY
++`CraftArmy/Core.lua`, `CraftArmy/Collectors.lua`, `CraftArmy/ViewModel.lua`,
++`CraftArmy/Dashboard.lua`, `CraftArmy/SelfTests.lua`. Preserve all other files/data and
++diagnostics. SelfTests carries regressions, **not a request to rerun the full native suite**.
++
++After that reviewed update, out of combat open your own ready **Midnight Inscription**
++with no pending specialization changes. Run one normal `/ca scan`, then `/ca`, to populate
++optional names. Compare normal tree branch names/individual X/Y with the native UI;
++confirm all branches appear and all five value cells are silent normally but accessible
++with Shift-before-hover. Check unchanged native/third-party gear content and report any
++unknown names, mismatch, error, warning or freeze. Stop on real problems; preserve data.
++No full native selftest, large capture, `/ca knowledgecheck`, gameplay action, reset,
++V01 restart or case88 timing chase is requested. U02 target-client name/API behavior,
++wrapped readability and hover checks remain NOT RUN; broader T02 acceptance is incomplete.
+ 
+ ## Current validation policy — approved 2026-11-07
+ 
+-**No further full `/ca selftest` timing chase is requested.** U01's scoped update above
+-has passed its local/static review gate; native usability is still pending. The latest
++**No further full `/ca selftest` timing chase is requested.** U02's update above is
++review-gated; focused native label/hover checks follow review. The latest
+ client result is **INCOMPLETE:87 passed/0failed of149**, case88unit2 at134.4ms,
+ wall77323.9ms. It is not a full PASS and does not show an assertion failure. Keep the
+ 100ms/10000-step safety limits and every existing test/workload unchanged.
+@@ -56,7 +63,7 @@
+ 
+ All three user-run V01 rounds are complete for the reported scoped Inscription values,
+ normal-use responsiveness, closed-context preservation and reload persistence. Explicit
+-stale wording was not confirmed. Do not restart these rounds for U01; the earlier
++stale wording was not confirmed. Do not restart these rounds for U02; the earlier
+ procedure is retained below as historical context, not current testing instructions.
+ 
+ 1. Out of combat, open your own ready **Midnight Inscription**, with no pending

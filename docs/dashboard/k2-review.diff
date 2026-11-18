@@ -1,0 +1,1964 @@
+# Generated K2 review evidence: actual K1 baseline to corrected working files
+# No Git repository. Primary-generated textual comparison, not Lua execution.
+# CraftArmy/Core.lua baselineSHA256=01dff992dff95787e2bc7cd257a9243c2e4eacd92193aea97c83681bd33e5615 targetSHA256=68fa0719550f6befbf1f094966c5115d1425e1f9fdad1a30737bab67dfc7d441
+--- K1/CraftArmy/Core.lua
++++ K2-corrected/CraftArmy/Core.lua
+@@ -181,22 +181,95 @@
+     if v.metadataReady and (not positive(v.itemID) or v.link==nil) then return false end
+     return true
+ end
++local NATIVE="native-rank-reconciled-v1"
++local SOURCE_PIN="297d7aaaa736f346b3e036f38ee088eaf7f8c07f"
++local function nativeInteger(v) return Core.Integer(v) and v<=2147483647 end
++local function nativeID(v) return nativeInteger(v) and v>0 end
++local function nativeScope(v)
++    return type(v)=="table" and v.skillLineID==2913 and v.parentID==773 and v.profession==13 and v.expansionID==11
++end
++local function uniqueIDs(v,limit)
++    local seen={}
++    return array(v,limit,function(id)
++        if not nativeID(id) or seen[id] then return false end
++        seen[id]=true; return true
++    end)
++end
++local function costs(v)
++    local seen={}
++    return array(v,16,function(row)
++        if type(row)~="table" or not nativeID(row.ID) or not nativeInteger(row.amount) or seen[row.ID] then return false end
++        seen[row.ID]=true; return true
++    end)
++end
++local function entry(v)
++    return type(v)=="table" and optional(v.maxRanks,nativeInteger) and optional(v.type,nativeInteger) and
++        optional(v.definitionID,nativeID) and optional(v.entryCostComplete,boolean) and optional(v.entryCost,costs) and
++        (v.entryCostComplete~=true or v.entryCost~=nil)
++end
++local function entryRank(v)
++    return type(v)=="table" and nativeID(v.entryID) and nativeInteger(v.rank)
++end
++local function increasedMap(v)
++    if type(v)~="table" then return false end
++    local count=0
++    for id,ranks in pairs(v) do
++        count=count+1
++        if count>32 or not nativeID(id) or not nativeInteger(ranks) then return false end
++    end
++    return true
++end
++local function traitCurrencies(v)
++    local seen={}
++    return array(v,64,function(row)
++        if type(row)~="table" or not nativeID(row.traitCurrencyID) or seen[row.traitCurrencyID] or
++            not nativeInteger(row.quantity) or not nativeInteger(row.spent) or not optional(row.maxQuantity,nativeInteger) then return false end
++        seen[row.traitCurrencyID]=true; return true
++    end)
++end
+ local function node(v)
+     if type(v)~="table" or not optional(v.ID,positive) or not optional(v.isAvailable,boolean) then return false end
+     for _,name in ipairs({"ranksPurchased","ranksIncreased","currentRank","maxRanks"}) do
+         if not optional(v[name],function(n) return finite(n) and n%1==0 end) then return false end
+     end
+-    return true
++    for _,name in ipairs({"type","flags","activeRank","totalMaxRanks"}) do
++        if not optional(v[name],nativeInteger) then return false end
++    end
++    return optional(v.activeEntry,entryRank) and optional(v.nextEntry,entryRank) and
++        optional(v.entryIDs,function(x) return uniqueIDs(x,32) end) and
++        optional(v.entryIDsWithCommittedRanks,function(x) return uniqueIDs(x,32) end) and
++        optional(v.entryIDToRanksIncreased,increasedMap)
+ end
+ local function path(v)
+     if type(v)~="table" or not optional(v.node,node) or not optional(v.unlockEntryID,positive) or
+         not optional(v.costRule,label) or not optional(v.costReason,label) or not optional(v.costEvidence,label) or
+-        not boolean(v.childrenComplete) then return false end
++        not boolean(v.childrenComplete) or not optional(v.metadataComplete,boolean) or
++        not optional(v.locked,boolean) or not optional(v.spendEntryID,nativeID) or
++        not optional(v.spendCurrencyID,nativeID) or not optional(v.spend,entry) then return false end
+     if v.children~=nil and not idList(v.children,16) then return false end
+     if v.childrenComplete and v.children==nil then return false end
+-    if v.unlock~=nil and (type(v.unlock)~="table" or not optional(v.unlock.maxRanks,Core.Integer) or
+-        not optional(v.unlock.type,Core.Integer)) then return false end
+-    if v.costs~=nil and not array(v.costs,8,function(cost)
++    if not optional(v.unlock,entry) then return false end
++    if v.metadataComplete~=nil then
++        if not optional(v.costs,costs) or not optional(v.unlockEntryID,nativeID) or
++            not optional(v.children,function(x) return uniqueIDs(x,16) end) then return false end
++        if v.node then
++            for _,name in ipairs({"ID","ranksPurchased","ranksIncreased","currentRank","maxRanks"}) do
++                if not optional(v.node[name],name=="ID" and nativeID or nativeInteger) then return false end
++            end
++        end
++        if v.metadataComplete then
++            if not v.node or not nativeID(v.node.ID) or not nativeID(v.unlockEntryID) or not nativeID(v.spendEntryID) or
++                not nativeID(v.spendCurrencyID) or not v.unlock or not v.spend or
++                not nativeInteger(v.unlock.type) or not nativeInteger(v.unlock.maxRanks) or
++                not nativeInteger(v.spend.type) or not nativeInteger(v.spend.maxRanks) or
++                v.unlock.entryCostComplete~=true or v.spend.entryCostComplete~=true or not costs(v.costs) or
++                type(v.node.isAvailable)~="boolean" or not uniqueIDs(v.node.entryIDs,32) or
++                not uniqueIDs(v.node.entryIDsWithCommittedRanks,32) or not increasedMap(v.node.entryIDToRanksIncreased) then return false end
++            for _,key in ipairs({"type","flags","ranksPurchased","ranksIncreased","currentRank","activeRank","maxRanks","totalMaxRanks"}) do
++                if not nativeInteger(v.node[key]) then return false end
++            end
++        end
++    elseif v.costs~=nil and not array(v.costs,16,function(cost)
+         return type(cost)=="table" and optional(cost.ID,positive) and optional(cost.amount,finite)
+     end) then return false end
+     return optional(v.id,positive) and optional(v.purchased,Core.Integer) and optional(v.capacity,Core.Integer)
+@@ -206,7 +279,17 @@
+ end
+ local function rawKnowledge(v)
+     if type(v)~="table" or not optional(v.configID,positive) or not optional(v.stagedStart,boolean) or
+-        not optional(v.stagedEnd,boolean) or not optional(v.stable,boolean) or not boolean(v.tabsComplete) then return false end
++        not optional(v.stagedEnd,boolean) or not optional(v.stable,boolean) or not boolean(v.tabsComplete) or
++        not optional(v.nativeComplete,boolean) or not optional(v.sourceCounter,nativeInteger) then return false end
++    if v.policy~=nil and (v.policy~=NATIVE or not nativeScope(v.identity) or not boolean(v.nativeComplete) or
++        not optional(v.configID,nativeID)) then return false end
++    if v.policy==NATIVE and v.nativeComplete and (not nativeID(v.configID) or not nativeInteger(v.sourceCounter)) then return false end
++    if v.identity~=nil then
++        if type(v.identity)~="table" then return false end
++        for _,key in ipairs({"skillLineID","parentID","profession","expansionID"}) do
++            if not optional(v.identity[key],nativeID) then return false end
++        end
++    end
+     return array(v.tabs,8,function(t)
+         if not tabIdentity(t) or not boolean(t.coverageComplete) or type(t.paths)~="table" then return false end
+         local count=0
+@@ -214,7 +297,18 @@
+             count=count+1
+             if count>64 or not positive(id) or not path(p) or (p.node and p.node.ID and p.node.ID~=id) then return false end
+         end
+-        return t.currencies==nil or array(t.currencies,8,function(currency)
++        if not optional(t.currenciesComplete,boolean) or not optional(t.currencyStatus,label) or
++            not optional(t.currencyCount,nativeInteger) then return false end
++        if v.policy==NATIVE then
++            if not nativeID(t.id) or not optional(t.root,nativeID) or not boolean(t.currenciesComplete) or not traitCurrencies(t.currencies) then return false end
++            for id,p in pairs(t.paths) do if not nativeID(id) or not boolean(p.metadataComplete) then return false end end
++            if v.nativeComplete then
++                if not t.coverageComplete or not t.currenciesComplete then return false end
++                for _,p in pairs(t.paths) do if not p.metadataComplete or not p.childrenComplete then return false end end
++            end
++            return true
++        end
++        return t.currencies==nil or array(t.currencies,64,function(currency)
+             return type(currency)=="table" and optional(currency.traitCurrencyID,positive) and
+                 optional(currency.quantity,finite) and optional(currency.maxQuantity,finite) and optional(currency.spent,finite)
+         end)
+@@ -225,6 +319,17 @@
+         not Core.Integer(v.purchased) or not Core.Integer(v.capacity) or v.purchased>v.capacity or
+         type(v.coverage)~="table" or not Core.Integer(v.coverage.discovered) or not Core.Integer(v.coverage.captured) or
+         not boolean(v.coverage.limit) then return false end
++    if v.accountingPolicy~=nil and v.accountingPolicy~=NATIVE then return false end
++    local native=v.accountingPolicy==NATIVE
++    if v.accountingEvidence~=nil then
++        local e=v.accountingEvidence
++        if type(e)~="table" or not nativeID(e.currencyID) or not nativeInteger(e.spent) or
++            not nativeInteger(e.quantity) or not nativeInteger(e.totalPurchased) or e.totalPurchased~=e.spent or
++            e.sourcePin~=SOURCE_PIN or not native then return false end
++    end
++    if not optional(v.currenciesComplete,boolean) or not optional(v.currencies,traitCurrencies) then return false end
++    if native and (not nativeID(v.id) or v.accountingEvidence==nil or v.purchased>v.accountingEvidence.totalPurchased or
++        v.currenciesComplete~=true or not traitCurrencies(v.currencies)) then return false end
+     local seen, sum, cap={},0,0
+     if not array(v.paths,64,function(p)
+         if not path(p) or not positive(p.id) or seen[p.id] or not Core.Integer(p.purchased) or
+@@ -234,6 +339,50 @@
+             if not Core.Integer(p.node[key]) then return false end
+         end
+         if p.unlock.maxRanks~=0 and p.unlock.maxRanks~=1 then return false end
++        if native then
++            local n,u,s=p.node,p.unlock,p.spend
++            if p.metadataComplete~=true or p.costRule~="unknown" or not nativeID(p.spendCurrencyID) or
++                p.spendCurrencyID~=v.accountingEvidence.currencyID or not nativeID(p.spendEntryID) or
++                p.spendEntryID==p.unlockEntryID or not entry(s) or s.type~=7 or u.type~=9 or
++                not nativeInteger(s.maxRanks) or s.maxRanks==0 or n.maxRanks~=u.maxRanks+s.maxRanks or
++                n.ranksIncreased~=0 or n.currentRank~=n.ranksPurchased or n.activeRank~=n.currentRank or
++                n.totalMaxRanks~=n.maxRanks or n.type~=1 or n.flags~=0 or type(n.isAvailable)~="boolean" or
++                p.purchased~=(n.ranksPurchased>0 and n.ranksPurchased-u.maxRanks or 0) or
++                p.capacity~=n.maxRanks-u.maxRanks or type(p.locked)~="boolean" or
++                p.locked~=(n.ranksPurchased==0 and u.maxRanks==1) or not nativeID(n.ID) or n.ID~=p.id or
++                not uniqueIDs(n.entryIDs,32) or #n.entryIDs~=2 or not uniqueIDs(n.entryIDsWithCommittedRanks,32) or
++                not increasedMap(n.entryIDToRanksIncreased) or not entryRank(n.activeEntry) or
++                not costs(p.costs) or #p.costs~=1 or p.costs[1].amount~=1 then return false end
++            local pair={[p.unlockEntryID]=true,[p.spendEntryID]=true}
++            for _,entryID in ipairs(n.entryIDs) do if not pair[entryID] then return false end end
++            local count=0
++            for entryID,ranks in pairs(n.entryIDToRanksIncreased) do
++                count=count+1; if not pair[entryID] or ranks~=0 then return false end
++            end
++            if count~=2 then return false end
++            local committed={}
++            for _,entryID in ipairs(n.entryIDsWithCommittedRanks) do
++                if not pair[entryID] then return false end; committed[entryID]=true
++            end
++            local rp=n.ranksPurchased
++            local active=n.activeEntry
++            if rp>u.maxRanks then
++                if active.entryID~=p.spendEntryID or active.rank~=p.purchased then return false end
++            elseif active.entryID~=p.unlockEntryID or active.rank~=rp then return false end
++            if (rp==0 and #n.entryIDsWithCommittedRanks~=0) or (rp>0 and not committed[active.entryID]) then return false end
++            if rp==n.maxRanks then if n.nextEntry~=nil then return false end
++            elseif not entryRank(n.nextEntry) or not pair[n.nextEntry.entryID] or n.nextEntry.rank==0 or
++                n.nextEntry.entryID~=(p.locked and p.unlockEntryID or p.spendEntryID) then return false end
++            for _,e in ipairs({u,s}) do
++                if e.entryCostComplete~=true or not costs(e.entryCost) or #e.entryCost~=0 then return false end
++            end
++            local rows={}
++            for _,row in ipairs(v.currencies) do rows[row.traitCurrencyID]=row end
++            local shared=rows[p.spendCurrencyID]
++            if not shared or shared.quantity~=v.accountingEvidence.quantity or shared.spent~=v.accountingEvidence.spent or
++                (p.locked and (p.costs[1].ID==p.spendCurrencyID or not rows[p.costs[1].ID])) or
++                (not p.locked and p.costs[1].ID~=p.spendCurrencyID) then return false end
++        end
+         seen[p.id]=p; sum=sum+p.purchased; cap=cap+p.capacity
+         return true
+     end) then return false end
+@@ -294,9 +443,14 @@
+     return true
+ end
+ local function validGeneration(g, id)
+-    return type(g) == "table" and Core.Integer(g.generation, 1) and
++    if not (type(g) == "table" and Core.Integer(g.generation, 1) and
+         validIdentity(g.identity,id) and Core.Integer(g.scannedAt) and
+-        validFields(g.fields, g.generation)
++        validFields(g.fields, g.generation)) then return false end
++    for _,f in pairs(g.fields) do
++        local v=f.last and f.last.value
++        if type(v)=="table" and (v.policy==NATIVE or v.accountingPolicy==NATIVE) and not nativeScope(g.identity) then return false end
++    end
++    return true
+ end
+ function Core.Open(db)
+     if db == nil then return {schema=1, characters={}}, nil end
+@@ -329,6 +483,32 @@
+         end
+     end
+     return db
++end
++
++-- Preflight-only mirror of an already Open-validated graph. Unlike Core.Copy,
++-- memoization retains aliases so a simulated map-key write reaches every alias
++-- of that map, without rewriting aliases of the old character object.
++local function candidateMirror(db)
++    local memo,count={},0
++    local function mirror(value,depth)
++        count=count+1
++        if count>50000 or depth>20 then error("mirror traversal limit") end
++        local kind=type(value)
++        if kind=="nil" or kind=="boolean" then return value end
++        if kind=="number" and Core.Finite(value) then return value end
++        if kind=="string" and #value<=4096 then return value end
++        if kind~="table" or getmetatable(value) then error("invalid mirror value") end
++        if memo[value] then return memo[value] end
++        local out={}; memo[value]=out
++        for key,child in pairs(value) do
++            if not ((type(key)=="string" and #key<=128) or Core.Integer(key,0)) then error("invalid mirror key") end
++            out[key]=mirror(child,depth+1)
++        end
++        return out
++    end
++    local ok,result=pcall(mirror,db,0)
++    if ok then return result end
++    return nil
+ end
+ 
+ function Core.Apply(db, character, identity, observations, at, build)
+@@ -365,7 +545,15 @@
+         g.fields[key] = field
+     end
+     g.scannedAt = at
+-    p.active = g; c.professions[id] = p; db.characters[character.guid] = c
++    if not validGeneration(g,id) then return nil,"Invalid candidate generation/scope" end
++    p.active = g; c.professions[id] = p
++    -- Simulate exactly the single real write on an alias-preserving mirror. A
++    -- shallow root or ordinary Copy would undercount aliased characters maps.
++    local proposal=candidateMirror(db)
++    if not proposal then return nil,"Bounded saved data mirror unavailable; scan not applied" end
++    proposal.characters[character.guid]=c
++    if not Core.Copy(proposal) then return nil,"Assembled snapshot exceeds bounded saved data limits" end
++    db.characters[character.guid] = c
+     return g
+ end
+ 
+# CraftArmy/Knowledge.lua baselineSHA256=1bf9930ea8272e46b6147ba96afcb16467a915d1a10e5295a68db1f2a9f9c4e0 targetSHA256=fca4582dd56101068fe022592704a89a6e26f0a669503c7fa359c318693a448d
+--- K1/CraftArmy/Knowledge.lua
++++ K2-corrected/CraftArmy/Knowledge.lua
+@@ -30,7 +30,192 @@
+ end
+ K.PathPoints = pathPoints
+ 
++local POLICY="native-rank-reconciled-v1"
++local PIN="297d7aaaa736f346b3e036f38ee088eaf7f8c07f"
++local function integer(v,low) return C.Integer(v,low or 0) and v<=2147483647 end
++local function plain(v) return type(v)=="table" and getmetatable(v)==nil end
++local function nativeList(v,limit,check)
++    if not plain(v) then return false end
++    local count,max=0,0
++    for key,x in pairs(v) do
++        count=count+1
++        if count>limit or not integer(key,1) or key>limit or not check(x) then return false end
++        if key>max then max=key end
++    end
++    return count==max
++end
++local function nativeIDs(v,limit)
++    local seen={}
++    return nativeList(v,limit,function(id)
++        if not integer(id,1) or seen[id] then return false end
++        seen[id]=true; return true
++    end)
++end
++local function currencyRows(tab)
++    if not plain(tab) or tab.currenciesComplete~=true then return nil end
++    local rows={}
++    if not nativeList(tab.currencies,64,function(v)
++        if not plain(v) or not integer(v.traitCurrencyID,1) or rows[v.traitCurrencyID] or
++            not integer(v.quantity) or not integer(v.spent) or
++            (v.maxQuantity~=nil and not integer(v.maxQuantity)) then return false end
++        rows[v.traitCurrencyID]=v; return true
++    end) then return nil end
++    return rows
++end
++function K.NativePathPoints(p,tab)
++    local function bad() return nil,"Native path metadata/state/current-cost guard failed" end
++    if not plain(p) or p.metadataComplete~=true or p.childrenComplete~=true or
++        not nativeIDs(p.children,16) or p.costRule~="unknown" or not plain(p.node) then return bad() end
++    local n,u,s=p.node,p.unlock,p.spend
++    if not integer(n.ID,1) or (p.id~=nil and n.ID~=p.id) or n.type~=1 or n.flags~=0 or
++        type(n.isAvailable)~="boolean" then return bad() end
++    for _,key in ipairs({"currentRank","activeRank","ranksPurchased","ranksIncreased","maxRanks","totalMaxRanks"}) do
++        if not integer(n[key]) then return bad() end
++    end
++    if n.ranksIncreased~=0 or n.currentRank~=n.ranksPurchased or n.activeRank~=n.currentRank or
++        n.totalMaxRanks~=n.maxRanks then return bad() end
++    local un,sp=p.unlockEntryID,p.spendEntryID
++    if not integer(un,1) or not integer(sp,1) or un==sp or not nativeIDs(n.entryIDs,32) or
++        #n.entryIDs~=2 or not nativeIDs(n.entryIDsWithCommittedRanks,32) then return bad() end
++    local pair={[un]=true,[sp]=true}
++    for _,id in ipairs(n.entryIDs) do if not pair[id] then return bad() end end
++    if not plain(n.entryIDToRanksIncreased) then return bad() end
++    local count=0
++    for id,ranks in pairs(n.entryIDToRanksIncreased) do
++        count=count+1
++        if count>2 or not pair[id] or ranks~=0 then return bad() end
++    end
++    if count~=2 then return bad() end
++    if not plain(u) or not plain(s) or u.type~=9 or s.type~=7 or (u.maxRanks~=0 and u.maxRanks~=1) or
++        not integer(s.maxRanks,1) or n.maxRanks~=u.maxRanks+s.maxRanks then return bad() end
++    for _,e in ipairs({u,s}) do
++        if e.entryCostComplete~=true or not nativeList(e.entryCost,16,function() return false end) then return bad() end
++    end
++    local rp=n.ranksPurchased
++    local points=rp>0 and rp-u.maxRanks or 0
++    local cap=n.maxRanks-u.maxRanks
++    if not integer(points) or not integer(cap,1) or points>cap then return bad() end
++    local function rank(e)
++        return plain(e) and integer(e.entryID,1) and pair[e.entryID] and integer(e.rank) and
++            e.rank<=(e.entryID==un and u.maxRanks or s.maxRanks)
++    end
++    if not rank(n.activeEntry) then return bad() end
++    local active=n.activeEntry
++    if rp>u.maxRanks then
++        if active.entryID~=sp or active.rank~=points then return bad() end
++    elseif active.entryID~=un or active.rank~=(rp>0 and u.maxRanks or 0) then return bad() end
++    local committed={}
++    for _,id in ipairs(n.entryIDsWithCommittedRanks) do
++        if not pair[id] then return bad() end
++        committed[id]=true
++    end
++    if (rp==0 and #n.entryIDsWithCommittedRanks~=0) or (rp>0 and not committed[active.entryID]) then return bad() end
++    if rp==n.maxRanks then
++        if n.nextEntry~=nil then return bad() end
++    elseif not plain(n.nextEntry) or not integer(n.nextEntry.entryID,1) or
++        not pair[n.nextEntry.entryID] or not integer(n.nextEntry.rank,1) then return bad() end
++    local rows=currencyRows(tab)
++    if not integer(p.spendCurrencyID,1) or not rows or not rows[p.spendCurrencyID] or
++        not nativeList(p.costs,16,function(v)
++            return plain(v) and integer(v.ID,1) and integer(v.amount) and v.amount==1
++        end) or #p.costs~=1 then return bad() end
++    local cost=p.costs[1]
++    local locked=rp==0 and u.maxRanks==1
++    if locked then
++        if n.nextEntry.entryID~=un or cost.ID==p.spendCurrencyID or not rows[cost.ID] then return bad() end
++    else
++        if cost.ID~=p.spendCurrencyID or (rp<n.maxRanks and n.nextEntry.entryID~=sp) then return bad() end
++    end
++    return {purchased=points,capacity=cap,locked=locked}
++end
++
++local function nativeEvaluate(scan)
++    local out={trees={},complete=false}
++    if not plain(scan) then out.reason="Malformed native scan"; return out end
++    local identity=scan.identity
++    local all=plain(identity) and identity.skillLineID==2913 and identity.parentID==773 and
++        identity.profession==13 and identity.expansionID==11 and integer(scan.configID,1) and
++        integer(scan.sourceCounter) and scan.nativeComplete==true and scan.tabsComplete==true and
++        scan.stable==true and scan.stagedStart==false and scan.stagedEnd==false
++    local tabsValid=nativeList(scan.tabs,8,function(v) return plain(v) end) and #scan.tabs>0
++    if not tabsValid then all=false end
++    local owners,tabs,common,shared,sum={}, {},nil,nil,0
++    local function fail(reason) all=false; out.reason=out.reason or reason end
++    for i=1,plain(scan.tabs) and math.min(#scan.tabs,8) or 0 do
++        local t=scan.tabs[i]
++        if not plain(t) or not integer(t.id,1) then fail("Invalid tab") else
++            local r={id=t.id,name=t.name,root=t.root,paths={},complete=false,purchased=0,capacity=0,
++                coverage={discovered=0,captured=0,limit=false},accountingPolicy=POLICY}
++            out.trees[#out.trees+1]=r
++            if tabs[t.id] or not integer(t.root,1) or t.coverageComplete~=true or not plain(t.paths) or
++                (t.name~=nil and (type(t.name)~="string" or #t.name>256)) then fail("Incomplete/duplicate native tab") end
++            tabs[t.id]=true
++            local rows=currencyRows(t)
++            if not rows then fail("Incomplete native currencies") end
++            r.currencies=rows and C.Copy(t.currencies) or nil
++            r.currenciesComplete=rows~=nil
++            local seen={}
++            local function visit(id)
++                if not integer(id,1) or seen[id] or owners[id] then fail("Cycle/shared native path"); return end
++                if r.coverage.discovered>=64 then r.coverage.limit=true; fail("Native path limit"); return end
++                seen[id]=true; owners[id]=true; r.coverage.discovered=r.coverage.discovered+1
++                local p=plain(t.paths) and t.paths[id]
++                if not plain(p) or not plain(p.node) or p.node.ID~=id then fail("Missing native path"); return end
++                local points,why=K.NativePathPoints(p,t)
++                local raw=C.Copy(p)
++                if not raw then fail("Malformed native path"); return end
++                raw.id=id; r.paths[#r.paths+1]=raw; r.coverage.captured=r.coverage.captured+1
++                if points then
++                    raw.purchased,raw.capacity,raw.locked=points.purchased,points.capacity,points.locked
++                    r.purchased=r.purchased+points.purchased; r.capacity=r.capacity+points.capacity
++                else fail(why) end
++                if integer(p.spendCurrencyID,1) then
++                    if common and common~=p.spendCurrencyID then fail("Different native spend currencies") end
++                    common=common or p.spendCurrencyID
++                else fail("Missing native spend currency") end
++                if nativeIDs(p.children,16) then for _,child in ipairs(p.children) do visit(child) end
++                else fail("Invalid native children") end
++            end
++            if integer(t.root,1) then visit(t.root) end
++            local count=0
++            if plain(t.paths) then
++                for id in pairs(t.paths) do
++                    count=count+1; if count>64 then fail("Native path map limit"); break end
++                    if not integer(id,1) or not seen[id] then fail("Unreachable native path") end
++                end
++            end
++            if count~=r.coverage.captured then fail("Native coverage mismatch") end
++            sum=sum+r.purchased
++        end
++    end
++    for i=1,plain(scan.tabs) and math.min(#scan.tabs,8) or 0 do
++        local t=scan.tabs[i]
++        local rows=currencyRows(t)
++        local row=rows and common and rows[common]
++        if not row then fail("Missing shared-spend row")
++        elseif shared and (shared.spent~=row.spent or shared.quantity~=row.quantity) then fail("Conflicting shared-spend rows")
++        else shared=row end
++    end
++    if not shared or sum~=shared.spent then fail("Shared spent reconciliation unknown/mismatch") end
++    if all and #out.trees>0 then
++        out.complete=true; out.sharedSpent=shared.spent
++        for _,r in ipairs(out.trees) do
++            r.complete=true
++            r.accountingEvidence={currencyID=common,spent=shared.spent,quantity=shared.quantity,
++                totalPurchased=sum,sourcePin=PIN}
++        end
++    else
++        out.reason=out.reason or "Native scope/staging/source coverage incomplete"
++        for _,r in ipairs(out.trees) do r.purchased=nil; r.capacity=nil; r.reason=out.reason end
++    end
++    return out
++end
++
+ function K.Evaluate(scan)
++    if type(scan)=="table" and scan.policy~=nil then
++        if scan.policy==POLICY then return nativeEvaluate(scan) end
++        return {trees={},complete=false,reason="Unsupported knowledge accounting policy"}
++    end
+     local out = {trees={}, complete=true, sharedSpent=nil}
+     if type(scan) ~= "table" or type(scan.tabs) ~= "table" or not C.Integer(scan.configID, 1) then
+         out.complete=false; out.reason="missing config/tabs"; return out
+# CraftArmy/Collectors.lua baselineSHA256=6cca77eb72148d49adda1ebb391649c51c11859c4bd9cd347775004937e45138 targetSHA256=4fa5c2d0817be04c55eada64934f70f680cbc2c6d0a83943cf4411153ac9e60c
+--- K1/CraftArmy/Collectors.lua
++++ K2-corrected/CraftArmy/Collectors.lua
+@@ -50,6 +50,102 @@
+             category=D.enchants[id] and D.enchants[id].category or nil}
+     end
+     return {status="observed", present=false, id=0}
++end
++
++-- Knowledge-only projection: bounded inspection, plain typed output, no API error
++-- payloads. A valid prefix is evidence, never a claim that its source was complete.
++local MAX=2147483647
++local function knInt(v,low) return C.Integer(v,low or 0) and v<=MAX end
++local function knPlain(v) return type(v)=="table" and getmetatable(v)==nil end
++local function knRead(env,path,...)
++    local fn=Collectors.Resolve(env,path)
++    if type(fn)~="function" then return nil,"unsupported" end
++    local ok,v=pcall(fn,...)
++    if not ok then return nil,"error" end
++    if v==nil then return nil,"unknown" end
++    return v,"observed"
++end
++local function knArray(raw,limit,project)
++    local out,seen={},{}
++    if not knPlain(raw) then return out,false,"unavailable/malformed list" end
++    local key,count,maxIndex=nil,0,0
++    local complete=true
++    while true do
++        key=next(raw,key); if key==nil then break end
++        count=count+1
++        if count>limit then complete=false; break end
++        if not knInt(key,1) or key>limit then complete=false
++        elseif key>maxIndex then maxIndex=key end
++    end
++    for i=1,limit do
++        local v=rawget(raw,i)
++        if v==nil then if i<=maxIndex then complete=false end
++        else
++            local item,valid,id=project(v)
++            if not valid then complete=false end
++            local duplicate=id and seen[id]
++            if duplicate then complete=false end
++            if id then seen[id]=true end
++            if item~=nil and not duplicate then out[#out+1]=item end
++        end
++    end
++    return out,complete,complete and "observed" or "incomplete list"
++end
++local function knIDs(raw,limit)
++    return knArray(raw,limit,function(v)
++        local valid=knInt(v,1); return valid and v or nil,valid,valid and v or nil
++    end)
++end
++local function knCosts(raw)
++    return knArray(raw,16,function(v)
++        if not knPlain(v) or not knInt(v.ID,1) or not knInt(v.amount) then return nil,false end
++        return {ID=v.ID,amount=v.amount},true,v.ID
++    end)
++end
++local function knNumbers(raw,out,names)
++    local complete=knPlain(raw)
++    for key in names:gmatch("%S+") do
++        local v=knPlain(raw) and rawget(raw,key)
++        if knInt(v,key=="ID" and 1 or 0) then out[key]=v else complete=false end
++    end
++    return complete
++end
++local function knNode(raw)
++    if not knPlain(raw) then return nil,false end
++    local n={}
++    local complete=knNumbers(raw,n,"ID type flags currentRank activeRank ranksPurchased ranksIncreased maxRanks totalMaxRanks")
++    if type(raw.isAvailable)=="boolean" then n.isAvailable=raw.isAvailable else complete=false end
++    for _,key in ipairs({"activeEntry","nextEntry"}) do
++        local v=rawget(raw,key)
++        if v~=nil then
++            if knPlain(v) and knInt(v.entryID,1) and knInt(v.rank) then n[key]={entryID=v.entryID,rank=v.rank}
++            else complete=false end
++        end
++    end
++    for _,key in ipairs({"entryIDs","entryIDsWithCommittedRanks"}) do
++        local valid; n[key],valid=knIDs(rawget(raw,key),32)
++        if not valid then complete=false end
++    end
++    n.entryIDToRanksIncreased={}
++    local map=rawget(raw,"entryIDToRanksIncreased")
++    if not knPlain(map) then complete=false else
++        local key,count=nil,0
++        while true do
++            local value; key,value=next(map,key); if key==nil then break end
++            count=count+1; if count>32 then complete=false; break end
++            if knInt(key,1) and knInt(value) then n.entryIDToRanksIncreased[key]=value else complete=false end
++        end
++    end
++    return n,complete
++end
++local function knEntry(env,config,id)
++    if not knInt(id,1) then return nil,false end
++    local raw=knRead(env,"C_Traits.GetEntryInfo",config,id)
++    if not knPlain(raw) then return nil,false end
++    local e={}
++    local complete=knNumbers(raw,e,"type maxRanks")
++    e.entryCost,e.entryCostComplete=knCosts(rawget(raw,"entryCost"))
++    return e,complete and e.entryCostComplete
+ end
+ 
+ function Collectors.New(env, db, changed)
+@@ -202,52 +298,77 @@
+         return value,failed or "observed",failReason
+     end
+     function self:Knowledge(ctx)
+-        local raw={configID=ctx.config, stagedStart=ctx.staged, tabs={}}
+-        local ids,complete=list(call("C_ProfSpecs.GetSpecTabIDsForSkillLine",ctx.identity.skillLineID),8)
+-        raw.tabsComplete=complete
+-        if not C.Integer(ctx.config,1) or not ids then return raw end
++        local raw={policy="native-rank-reconciled-v1",identity={},tabs={},tabsComplete=false,nativeComplete=false}
++        for _,key in ipairs({"skillLineID","parentID","profession","expansionID"}) do
++            if knInt(ctx.identity[key],1) then raw.identity[key]=ctx.identity[key] end
++        end
++        if knInt(ctx.sourceCounter) then raw.sourceCounter=ctx.sourceCounter end
++        if type(ctx.staged)=="boolean" then raw.stagedStart=ctx.staged end
++        if not knInt(ctx.config,1) then return raw end
++        raw.configID=ctx.config
++        local ids,complete=knIDs(knRead(env,"C_ProfSpecs.GetSpecTabIDsForSkillLine",ctx.identity.skillLineID),8)
++        raw.tabsComplete=complete and #ids>0
++        raw.nativeComplete=raw.tabsComplete and raw.sourceCounter~=nil
++        local owners={}
+         for _,id in ipairs(ids) do
+-            local info=call("C_ProfSpecs.GetTabInfo",id)
+-            local root=call("C_ProfSpecs.GetRootPathForTab",id)
+-            local tab={id=id,name=type(info)=="table" and info.name or nil,root=root,paths={},coverageComplete=true}
+-            tab.currencies={}
+-            local currencies=call("C_Traits.GetTreeCurrencyInfo",ctx.config,id,true)
+-            if type(currencies)=="table" then
+-                for j=1,math.min(#currencies,8) do tab.currencies[j]=pick(currencies[j],"traitCurrencyID quantity maxQuantity spent") end
+-            end
++            local info=knRead(env,"C_ProfSpecs.GetTabInfo",id)
++            local root=knRead(env,"C_ProfSpecs.GetRootPathForTab",id)
++            local tab={id=id,paths={},coverageComplete=true}
++            if knPlain(info) and type(info.name)=="string" then tab.name=info.name:sub(1,256):gsub("[%c|]"," ")
++            else tab.coverageComplete=false end
++            if knInt(root,1) then tab.root=root else tab.coverageComplete=false end
++            tab.currencies,tab.currenciesComplete,tab.currencyStatus=knArray(
++                knRead(env,"C_Traits.GetTreeCurrencyInfo",ctx.config,id,true),64,function(v)
++                    if not knPlain(v) or not knInt(v.traitCurrencyID,1) or not knInt(v.quantity) or
++                        not knInt(v.spent) or (v.maxQuantity~=nil and not knInt(v.maxQuantity)) then return nil,false end
++                    return {traitCurrencyID=v.traitCurrencyID,quantity=v.quantity,spent=v.spent,maxQuantity=v.maxQuantity},true,v.traitCurrencyID
++                end)
++            tab.currencyCount=#tab.currencies
++            if not tab.currenciesComplete then tab.coverageComplete=false end
+             raw.tabs[#raw.tabs+1]=tab
+-            local queue,seen,cursor={root},{},1
+-            while cursor<=#queue and cursor<=64 do
++            local queue,seen,cursor={},{},1
++            local function discover(pathID)
++                if seen[pathID] or owners[pathID] then
++                    tab.coverageComplete=false
++                    if owners[pathID] then owners[pathID].coverageComplete=false end
++                    raw.nativeComplete=false; return
++                end
++                seen[pathID]=true; owners[pathID]=tab
++                if #queue>=64 then tab.coverageComplete=false else queue[#queue+1]=pathID end
++            end
++            if tab.root then discover(tab.root) end
++            while cursor<=#queue do
+                 local pathID=queue[cursor]; cursor=cursor+1
+-                if not C.Integer(pathID,1) or seen[pathID] then tab.coverageComplete=false else
+-                    seen[pathID]=true
+-                    local children,childComplete=list(call("C_ProfSpecs.GetChildrenForPath",pathID),16)
+-                    local node=pick(call("C_Traits.GetNodeInfo",ctx.config,pathID),
+-                        "ID ranksPurchased ranksIncreased currentRank maxRanks isAvailable")
+-                    local unlockID=call("C_ProfSpecs.GetUnlockEntryForPath",pathID)
+-                    local unlock=C.Integer(unlockID,1) and pick(call("C_Traits.GetEntryInfo",ctx.config,unlockID),"maxRanks type") or nil
+-                    local costs=call("C_Traits.GetNodeCost",ctx.config,pathID)
+-                    local costEvidence={}
+-                    if type(costs)=="table" then
+-                        for j=1,math.min(#costs,8) do costEvidence[j]=pick(costs[j],"ID amount") end
+-                    end
+-                    tab.paths[pathID]={node=node,children=children,childrenComplete=childComplete,
+-                        unlockEntryID=unlockID,unlock=unlock, costs=costEvidence,
+-                        costRule="unknown", costReason="Current node costs do not prove all-rank spend cost semantics"}
+-                    if children then
+-                        for _,child in ipairs(children) do
+-                            if #queue<64 then queue[#queue+1]=child else tab.coverageComplete=false end
+-                        end
+-                    end
+-                    if not childComplete or not node or not unlock then tab.coverageComplete=false end
+-                end
+-            end
+-            if not C.Integer(root,1) then tab.coverageComplete=false end
++                local p={costRule="unknown",costReason="Current costs are not verified future/all-rank costs"}
++                p.children,p.childrenComplete=knIDs(knRead(env,"C_ProfSpecs.GetChildrenForPath",pathID),16)
++                local valid; p.node,valid=knNode(knRead(env,"C_Traits.GetNodeInfo",ctx.config,pathID))
++                p.metadataComplete=valid and p.node.ID==pathID
++                if p.node and p.node.ID~=pathID then p.node.ID=nil; p.metadataComplete=false end
++                for _,role in ipairs({"unlock","spend"}) do
++                    local entryID=knRead(env,role=="unlock" and "C_ProfSpecs.GetUnlockEntryForPath" or "C_ProfSpecs.GetSpendEntryForPath",pathID)
++                    if knInt(entryID,1) then p[role.."EntryID"]=entryID end
++                    p[role],valid=knEntry(env,ctx.config,p[role.."EntryID"])
++                    if not valid then p.metadataComplete=false end
++                end
++                local currencyID=knRead(env,"C_ProfSpecs.GetSpendCurrencyForPath",pathID)
++                if knInt(currencyID,1) then p.spendCurrencyID=currencyID else p.metadataComplete=false end
++                p.costs,valid=knCosts(knRead(env,"C_Traits.GetNodeCost",ctx.config,pathID))
++                if not valid then p.metadataComplete=false end
++                if not p.childrenComplete or not p.metadataComplete then tab.coverageComplete=false end
++                tab.paths[pathID]=p
++                for _,child in ipairs(p.children) do discover(child) end
++            end
++            if not tab.coverageComplete then raw.nativeComplete=false end
+         end
+         return raw
+     end
+     function self:Scan()
++        if not C.Integer(self.serial) or not C.Integer(self.revision) then
++            self.fresh={}; self.pending={}; self.reason="Invalid scan generation token; collection blocked."
++            self.changed(); return false,self.reason
++        end
+         self.pending={}; self.fresh={}; self.serial=self.serial+1
++        local scanSerial=self.serial
+         if self.db then
+             local valid,why=C.Open(self.db)
+             if not valid then
+@@ -304,28 +425,50 @@
+         local kp,status,reason=call("C_ProfSpecs.GetCurrencyInfoForSkillLine",ctx.identity.skillLineID)
+         if type(kp)=="table" and C.Integer(kp.numAvailable) then obs("unspent",kp.numAvailable,"C_ProfSpecs.GetCurrencyInfoForSkillLine")
+         else obs("unspent",nil,"C_ProfSpecs.GetCurrencyInfoForSkillLine",status=="observed" and "unknown" or status,reason) end
++        local version="unknown"
++        if type(env.GetBuildInfo)=="function" then
++            local ok,v,b=pcall(env.GetBuildInfo)
++            if ok then version=tostring(v).." ("..tostring(b)..")" end
++        end
++        local locale=call("GetLocale")
++        obs("environment",{version=version,locale=locale},"GetBuildInfo / GetLocale")
+         local raw=self:Knowledge(ctx)
+         local finish=self:Context()
+-        if not self:Same(ctx,finish) then
++        if not self:Same(ctx,finish) or self.serial~=scanSerial or
++            finish.identity.expansionID~=ctx.identity.expansionID then
+             self:Invalidate("Profession/config/context changed; scan discarded"); self.changed(); return false,self.reason
+         end
+-        raw.stagedEnd=finish.staged; raw.stable=ctx.revision==self.revision
++        if type(finish.staged)=="boolean" then raw.stagedEnd=finish.staged end
++        raw.stable=ctx.revision==self.revision and self.serial==scanSerial
+         local result=K.Evaluate(raw)
+-        obs("knowledgeRaw",raw,"C_ProfSpecs / C_Traits")
++        -- Evidence is duplicated in coherent tree units. Do not raise the global
++        -- copier budget for a maximally sized scan: fail all trees together and
++        -- retain only failed attempts when that combined evidence cannot fit.
++        local evidenceFits=C.Copy({raw,result})~=nil
++        if not evidenceFits then
++            result.complete=false; result.reason="Knowledge evidence exceeds bounded snapshot payload"
++            for _,tree in ipairs(result.trees) do tree.complete=false; tree.reason=result.reason end
++        end
++        obs("knowledgeRaw",evidenceFits and raw or nil,"C_ProfSpecs / C_Traits",
++            evidenceFits and "observed" or "unknown",not evidenceFits and result.reason or nil)
+         local index={}
+         for _,tree in ipairs(result.trees) do
+             index[#index+1]={id=tree.id,name=tree.name,root=tree.root}
+             obs("tree:"..tree.id,tree.complete and tree or nil,"Knowledge.Evaluate",
+                 tree.complete and "observed" or "unknown",tree.reason)
+         end
+-        if raw.tabsComplete==true and #index>0 then
++        local character=self.db.characters[ctx.character.guid]
++        local profession=character and character.professions[ctx.identity.skillLineID]
++        local prior=profession and profession.active
++        local priorIndex=prior and prior.fields.knowledgeIndex and prior.fields.knowledgeIndex.last
++        if not result.complete and priorIndex then
++            obs("knowledgeIndex",nil,"Knowledge.Evaluate","unknown","Native evaluation failed; retained coherent tree index")
++        elseif raw.tabsComplete==true and #index>0 then
+             obs("knowledgeIndex",index,"C_ProfSpecs.GetSpecTabIDsForSkillLine")
+         else
+             obs("knowledgeIndex",nil,"C_ProfSpecs.GetSpecTabIDsForSkillLine","unknown","Incomplete tab/config coverage")
+-            local character=self.db.characters[ctx.character.guid]
+-            local profession=character and character.professions[ctx.identity.skillLineID]
+-            local prior=profession and profession.active
+-            local priorIndex=prior and prior.fields.knowledgeIndex and prior.fields.knowledgeIndex.last
++        end
++        if not result.complete or raw.tabsComplete~=true then
+             for _,tree in ipairs(priorIndex and priorIndex.value or {}) do
+                 if not observations["tree:"..tree.id] then
+                     obs("tree:"..tree.id,nil,"Knowledge.Evaluate","unknown","Tree absent from incomplete scan; retained coherent history")
+@@ -335,13 +478,9 @@
+         if ctx.staged~=false or finish.staged~=false then
+             obs("unspent",nil,"knowledge staging","unknown","Staged state not explicitly false at both boundaries")
+         end
+-        local version="unknown"
+-        if type(env.GetBuildInfo)=="function" then
+-            local ok,v,b=pcall(env.GetBuildInfo)
+-            if ok then version=tostring(v).." ("..tostring(b)..")" end
+-        end
+-        local locale=call("GetLocale")
+-        obs("environment",{version=version,locale=locale},"GetBuildInfo / GetLocale")
++        if self.serial~=scanSerial or self.revision~=ctx.revision then
++            self:Invalidate("Profession/config/context changed; scan discarded"); self.changed(); return false,self.reason
++        end
+         local g,err=C.Apply(self.db,ctx.character,ctx.identity,observations,at,tostring(version))
+         if not g then self.reason=err; self.changed(); return false,err end
+         local token={guid=ctx.character.guid,id=ctx.identity.skillLineID,generation=g.generation,
+@@ -349,7 +488,9 @@
+         local fresh={generation=g.generation,fields={}}
+         for key,o in pairs(observations) do if o.status=="observed" then fresh.fields[key]=true end end
+         self.fresh[token.guid..":"..token.id]=fresh
+-        self.reason="Guarded snapshot collected; knowledge cost eligibility pending evidence."
++        self.reason=result.complete and
++            "Snapshot refreshed; native rank points/shared-spent reconciled (not verified future costs)." or
++            "Snapshot refreshed; knowledge totals unknown or stale (native reconciliation incomplete)."
+         self:StartLoads(loads,token)
+         self.changed(); return true
+     end
+# CraftArmy/ViewModel.lua baselineSHA256=195de6fb5ae289e3bdb543b915c6bcbaac8b3c551e695ac1487b1bf0b3f85b55 targetSHA256=a9116a628a7168ec6b3cf0a7ef9be4878350da8cf87a15b39b16ca600b7d38f0
+--- K1/CraftArmy/ViewModel.lua
++++ K2-corrected/CraftArmy/ViewModel.lua
+@@ -93,6 +93,14 @@
+     local lines={state.text,"Observed tree at "..str(at)}
+     if tree then
+         lines[#lines+1]="Tree purchased/capacity: "..str(tree.purchased).."/"..str(tree.capacity)
++        local native=tree.accountingPolicy=="native-rank-reconciled-v1"
++        if native then
++            local e=tree.accountingEvidence or {}
++            lines[#lines+1]="Native rank points / shared-spent reconciled; NOT verified future/all-rank costs"
++            lines[#lines+1]="Shared currency "..str(e.currencyID)..": spent "..str(e.spent)..
++                "; compared ONCE to profession total "..str(e.totalPurchased).."; quantity "..str(e.quantity).." (unspent shown separately)"
++            lines[#lines+1]="Source pin: "..str(e.sourcePin)
++        end
+         local byID={}
+         for _,p in ipairs(tree.paths or {}) do byID[p.id]=p end
+         local seen={}
+@@ -101,14 +109,20 @@
+             seen[id]=true
+             local p=byID[id]
+             if not p then lines[#lines+1]="Missing path "..str(id); return end
+-            lines[#lines+1]=string.rep(" ",indent).."Path "..id..": "..str(p.purchased).."/"..str(p.capacity)..
+-                "; "..(p.node and p.node.isAvailable==false and "locked" or "state unknown/available")
++            local pathState=p.node and p.node.isAvailable==false and "locked" or "state unknown/available"
++            if native then
++                pathState=p.locked and ("locked; unlock token "..str(p.costs and p.costs[1] and p.costs[1].ID)..
++                    " distinct from spend currency "..str(p.spendCurrencyID)) or ("spend-ready; spend currency "..str(p.spendCurrencyID))
++            end
++            lines[#lines+1]=string.rep(" ",indent).."Path "..id..": "..str(p.purchased).."/"..str(p.capacity).."; "..pathState
+             for _,child in ipairs(p.children or {}) do visit(child,indent+1) end
+         end
+         visit(tree.root,0)
+         lines[#lines+1]="Coverage: "..str(tree.coverage and tree.coverage.captured).." paths; complete="..str(tree.complete)
+     elseif raw then
+-        lines[#lines+1]="Numeric total unknown: committed costs/unlock/coverage eligibility required"
++        lines[#lines+1]=raw.policy=="native-rank-reconciled-v1" and
++            "Native total unknown: complete metadata, stable unstaged coverage and shared-spent reconciliation required" or
++            "Numeric total unknown: committed costs/unlock/coverage eligibility required"
+         for _,t in ipairs(raw.tabs or {}) do
+             lines[#lines+1]="Tree "..str(t.id).."; root "..str(t.root).."; coverage="..str(t.coverageComplete)
+             local ids={}; for id in pairs(t.paths or {}) do ids[#ids+1]=id end; table.sort(ids)
+@@ -181,6 +195,7 @@
+     for _,t in ipairs(index or {}) do
+         local value,state=field("tree:"..t.id)
+         local tree={id=t.id,name=t.name or tostring(t.id),state=state}
++        if state.stale and value and type(value.name)=="string" then tree.name=value.name end
+         tree.shortName=tree.name:gsub("%s+",""):sub(1,3)
+         if value and C.Integer(value.purchased) and C.Integer(value.capacity) and value.capacity>0 then
+             tree.purchased=value.purchased; tree.capacity=value.capacity; tree.ratio=value.purchased/value.capacity
+# CraftArmy/SelfTests.lua baselineSHA256=347348ed578dd3899dcdf2b9b20d8c78bbb68da1ea99588e6c6622363b369227 targetSHA256=2a64e3a25d425dc90bbe607565b4e8ad07e30d18a261f8ad17bad5ee220713f5
+--- K1/CraftArmy/SelfTests.lua
++++ K2-corrected/CraftArmy/SelfTests.lua
+@@ -1810,6 +1810,911 @@
+     eq(window.edit.focused,true,"combat command makes no focus call"); eq(#env.fixtureWidgets,count); eq(#s.timers,0)
+ end)
+ 
++-- K2 fixtures are separate additions. The complete K1 suite above stays unchanged.
++-- Numeric IDs/topology/currencies below are sanitized native evidence, NEVER seeds
++-- or defaults for production. Active/committed states model the adopted guards.
++local function k2Fixture()
++    local env,state=fixtureAPI()
++    local f={tabs={},nodes={},entries={},children={},costs={},currencies={},unlock={},spend={},currency={}}
++    local data={
++        {1122,106192,{106191,106187},1,31,130942,130933,30,3902},
++        {1122,106191,{106190,106189,106188},1,31,130941,130925,30,3902},
++        {1122,106187,{106186,106185,106184},0,31,130937,130893,30,3912},
++        {1122,106190,{},0,31,130940,130917,30,3911},
++        {1122,106189,{},1,31,130939,130909,30,3902},
++        {1122,106188,{},0,31,130938,130901,30,3911},
++        {1122,106186,{},0,31,130936,130885,30,3907},
++        {1122,106185,{},0,31,130935,130877,30,3907},
++        {1122,106184,{},0,31,130934,130869,30,3907},
++        {1124,106280,{106279,106278,106277},11,11,131041,131037,10,3902},
++        {1124,106279,{},1,21,131040,131029,20,3902},
++        {1124,106278,{},21,21,131039,131021,20,3902},
++        {1124,106277,{},21,21,131038,131013,20,3902},
++        {1182,109660,{109659,109655},31,31,135911,135902,30,3902},
++        {1182,109659,{109658,109657,109656},31,31,135910,135894,30,3902},
++        {1182,109655,{109654,109653,109652},31,31,135906,135862,30,3902},
++        {1182,109658,{},31,31,135909,135886,30,3902},
++        {1182,109657,{},1,31,135908,135878,30,3902},
++        {1182,109656,{},5,31,135907,135870,30,3902},
++        {1182,109654,{},31,31,135905,135854,30,3902},
++        {1182,109653,{},31,31,135904,135846,30,3902},
++        {1182,109652,{},31,31,135903,135838,30,3902},
++        {1125,106358,{106357,106354,106351,106348},1,21,131132,131119,20,3902},
++        {1125,106357,{106356,106355},0,21,131131,131113,20,3936},
++        {1125,106354,{106353,106352},0,21,131128,131095,20,3936},
++        {1125,106351,{106350,106349},0,21,131125,131077,20,3936},
++        {1125,106348,{106347,106346},0,21,131122,131059,20,3936},
++        {1125,106356,{},0,21,131130,131107,20,3935},
++        {1125,106355,{},0,21,131129,131101,20,3935},
++        {1125,106353,{},0,21,131127,131089,20,3932},
++        {1125,106352,{},0,21,131126,131083,20,3932},
++        {1125,106350,{},0,21,131124,131071,20,3929},
++        {1125,106349,{},0,21,131123,131065,20,3929},
++        {1125,106347,{},0,21,131121,131053,20,3926},
++        {1125,106346,{},0,21,131120,131047,20,3926},
++    }
++    local tabs={}
++    for _,row in ipairs(data) do
++        local ti,id,ch,rp,max,un,sp,cap,cost=unpack(row)
++        if not tabs[ti] then
++            tabs[ti]={id=ti,root=id}; f.tabs[#f.tabs+1]=tabs[ti]
++        end
++        f.children[id]=ch; f.unlock[id]=un; f.spend[id]=sp; f.currency[id]=3902
++        f.entries[un]={type=9,maxRanks=1,entryCost={}}
++        f.entries[sp]={type=7,maxRanks=cap,entryCost={}}
++        f.costs[id]={{ID=cost,amount=1}}
++        local active={entryID=rp>1 and sp or un,rank=rp>1 and rp-1 or rp}
++        local nextEntry
++        if rp<max then nextEntry={entryID=rp==0 and un or sp,rank=rp==0 and 1 or rp==1 and 1 or rp+1} end
++        local committed=rp==0 and {} or rp==max and {sp} or rp>1 and {un,sp} or {un}
++        f.nodes[id]={ID=id,type=1,flags=0,isAvailable=true,ranksPurchased=rp,currentRank=rp,activeRank=rp,
++            ranksIncreased=0,maxRanks=max,totalMaxRanks=max,activeEntry=active,nextEntry=nextEntry,
++            entryIDs={un,sp},entryIDsWithCommittedRanks=committed,entryIDToRanksIncreased={[un]=0,[sp]=0}}
++    end
++    local currencyData={
++        [1122]={{3902,0,264},{3900,0,4},{3912,0,1},{3911,0,1},{3910,0,0},{3909,0,0},{3908,0,0},{3907,0,0},{3906,0,0},{3905,0,0},{3904,0,0}},
++        [1124]={{3902,0,264},{3900,0,4},{3923,0,3},{3922,0,0},{3921,0,0},{3920,0,0}},
++        [1182]={{3902,0,264},{3900,0,4},{4204,0,2},{4203,0,3},{4202,0,0},{4201,0,0},{4200,0,0},{4199,0,3},{4198,0,0},{4197,0,0},{4196,0,0}},
++        [1125]={{3902,0,264},{3900,0,4},{3936,1,0},{3935,0,0},{3934,0,0},{3933,0,0},{3932,0,0},{3931,0,0},{3930,0,0},{3929,0,0},{3928,0,0},{3927,0,0},{3926,0,0},{3925,0,0},{3924,0,0}},
++    }
++    for id,rows in pairs(currencyData) do
++        f.currencies[id]={}
++        for i,row in ipairs(rows) do f.currencies[id][i]={traitCurrencyID=row[1],quantity=row[2],spent=row[3]} end
++    end
++    local p,t=env.C_ProfSpecs,env.C_Traits
++    p.GetSpecTabIDsForSkillLine=function() local out={}; for i,tab in ipairs(f.tabs) do out[i]=tab.id end; return out end
++    p.GetTabInfo=function(id) return {name="Native fixture "..id} end
++    p.GetRootPathForTab=function(id) return tabs[id] and tabs[id].root end
++    p.GetChildrenForPath=function(id) return f.children[id] end
++    p.GetUnlockEntryForPath=function(id) return f.unlock[id] end
++    p.GetSpendEntryForPath=function(id) return f.spend[id] end
++    p.GetSpendCurrencyForPath=function(id) return f.currency[id] end
++    t.GetNodeInfo=function(_,id) return f.nodes[id] end
++    t.GetEntryInfo=function(_,id) return f.entries[id] end
++    t.GetNodeCost=function(_,id) return f.costs[id] end
++    t.GetTreeCurrencyInfo=function(_,id,exclude) eq(exclude,true); return f.currencies[id] end
++    local function forbidden() error("K2 forbidden gameplay") end
++    for _,key in ipairs({"PurchaseRank","RefundRank","CommitConfig","SetSelection","GetTreeNodes"}) do t[key]=forbidden end
++    env.CraftRecipe=forbidden; env.EquipItemByName=forbidden
++    return env,state,f,NS.Collectors.New(env,C.Open(nil))
++end
++local function k2Raw(c)
++    local ctx=assert(c:Context()); local raw=c:Knowledge(ctx)
++    raw.stagedEnd=false; raw.stable=true
++    return raw
++end
++local function k2Fail(raw,context)
++    local result=K.Evaluate(raw)
++    eq(result.complete,false,context); eq(result.sharedSpent,nil,context)
++    for _,tree in ipairs(result.trees) do
++        eq(tree.complete,false,context); eq(tree.purchased,nil,context); eq(tree.capacity,nil,context)
++    end
++end
++local function k2Observations(raw,result,at)
++    local obs={knowledgeRaw=C.Observation("observed",raw,at,"K2 fixture"),
++        knowledgeIndex=C.Observation("observed",{},at,"K2 fixture"),unspent=C.Observation("observed",0,at,"K2 fixture")}
++    for i,tree in ipairs(result.trees) do
++        obs.knowledgeIndex.value[i]={id=tree.id,name=tree.name,root=tree.root}
++        obs["tree:"..tree.id]=C.Observation("observed",tree,at,"K2 fixture")
++    end
++    return obs
++end
++case("K2 native35 real topology all18 unlock tokens and17 opened paths reconcile264 once",function()
++    local _,_,_,c=k2Fixture(); local raw=k2Raw(c); local r=K.Evaluate(raw)
++    eq(r.complete,true); eq(r.sharedSpent,264); eq(raw.policy,"native-rank-reconciled-v1")
++    eq(raw.identity.expansionID,11); eq(raw.sourceCounter,1); eq(raw.nativeComplete,true)
++    eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++    local opened,locked,entries,rawRanks=0,0,0,0
++    for i,t in ipairs(r.trees) do
++        eq(t.purchased,({0,50,214,0})[i]); eq(t.capacity,({270,70,270,260})[i])
++        eq(t.coverage.captured,({9,4,9,13})[i]); eq(#t.currencies,({11,6,11,15})[i])
++        eq(t.accountingPolicy,raw.policy); eq(t.accountingEvidence.totalPurchased,264)
++        eq(C.ValidPayload("tree:"..t.id,t,"observed"),true)
++        for _,p in ipairs(t.paths) do
++            eq(p.costRule,"unknown"); eq(p.node.isAvailable,true); rawRanks=rawRanks+p.node.ranksPurchased
++            entries=entries+2; eq(#p.unlock.entryCost,0); eq(#p.spend.entryCost,0)
++            if p.locked then locked=locked+1; assert(p.costs[1].ID~=p.spendCurrencyID)
++            else opened=opened+1; eq(p.costs[1].ID,3902) end
++            if p.id==109656 then eq(p.purchased,4); eq(p.node.activeEntry.rank,4); eq(p.node.nextEntry.rank,6) end
++            if p.node.ranksPurchased==p.node.maxRanks then eq(#p.node.entryIDsWithCommittedRanks,1); eq(p.node.nextEntry,nil) end
++        end
++    end
++    eq(opened,17); eq(locked,18); eq(entries,70); eq(rawRanks,281)
++end)
++case("K2 dynamic balances ranks caps currency IDs ordering and mixed zero unlock spend-ready",function()
++    local _,_,_,c=k2Fixture(); local raw=k2Raw(c)
++    local p=raw.tabs[1].paths[106192]
++    p.unlock.maxRanks=0; p.node.maxRanks=32; p.node.totalMaxRanks=32; p.spend.maxRanks=32
++    p.node.ranksPurchased=0; p.node.currentRank=0; p.node.activeRank=0
++    p.node.activeEntry.rank=0; p.node.entryIDsWithCommittedRanks={}
++    p.node.nextEntry={entryID=p.spendEntryID,rank=1}
++    local other=raw.tabs[1].paths[106189]
++    other.node.ranksPurchased=3; other.node.currentRank=3; other.node.activeRank=3
++    other.node.activeEntry={entryID=other.spendEntryID,rank=2}
++    other.node.entryIDsWithCommittedRanks={other.spendEntryID}
++    for _,tab in ipairs(raw.tabs) do
++        for _,pathValue in pairs(tab.paths) do
++            pathValue.spendCurrencyID=70002
++            if pathValue.costs[1].ID==3902 then pathValue.costs[1].ID=70002 end
++        end
++        for _,row in ipairs(tab.currencies) do
++            if row.traitCurrencyID==3902 then row.traitCurrencyID=70002; row.spent=266; row.quantity=7 end
++            if row.traitCurrencyID==3900 then row.spent=999 end
++        end
++        local shared=table.remove(tab.currencies,1); tab.currencies[#tab.currencies+1]=shared
++    end
++    raw.tabs[1],raw.tabs[4]=raw.tabs[4],raw.tabs[1]
++    local r=K.Evaluate(raw); eq(r.complete,true); eq(r.sharedSpent,266)
++    eq(r.trees[4].purchased,2); eq(r.trees[4].capacity,272)
++    eq(r.trees[4].accountingEvidence.currencyID,70002); eq(r.trees[4].accountingEvidence.quantity,7)
++    eq(K.NativePathPoints(p,raw.tabs[4]).purchased,0)
++    local observed=k2Observations(raw,r,10); local db=C.Open(nil)
++    assert(C.Apply(db,character,identity,observed,10,"fixture")); eq(C.Open(db),db)
++end)
++case("K2 every node rank type flag cap availability entry list and map guard fails all trees",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c)
++    local changes={
++        function(p) p.metadataComplete=false end,function(p) p.childrenComplete=false end,
++        function(p) p.costRule="verified-unit-spend" end,function(p) p.node.ID=999 end,
++        function(p) p.node.type=2 end,function(p) p.node.flags=1 end,function(p) p.node.isAvailable=nil end,
++        function(p) p.node.isAvailable=0 end,function(p) p.node.totalMaxRanks=32 end,
++        function(p) p.node.activeRank=0 end,function(p) p.node.currentRank=0 end,
++        function(p) p.node.ranksPurchased=-1 end,function(p) p.node.ranksPurchased=32 end,
++        function(p) p.node.ranksIncreased=1 end,function(p) p.node.maxRanks=30 end,
++        function(p) p.unlock.type=7 end,function(p) p.unlock.maxRanks=2 end,
++        function(p) p.spend.type=9 end,function(p) p.spend.maxRanks=0 end,
++        function(p) p.spendEntryID=p.unlockEntryID end,function(p) p.unlockEntryID=nil end,
++        function(p) p.node.entryIDs={} end,function(p) p.node.entryIDs[3]=999 end,
++        function(p) p.node.entryIDs[2]=p.unlockEntryID end,
++        function(p) p.node.entryIDToRanksIncreased={} end,
++        function(p) p.node.entryIDToRanksIncreased[p.unlockEntryID]=1 end,
++        function(p) p.node.entryIDToRanksIncreased[999]=0 end,
++        function(p) p.node.entryIDsWithCommittedRanks={} end,
++        function(p) p.node.entryIDsWithCommittedRanks={999} end,
++        function(p) p.node.entryIDsWithCommittedRanks={p.unlockEntryID,p.unlockEntryID} end,
++    }
++    for i,change in ipairs(changes) do
++        local raw=C.Copy(base); change(raw.tabs[1].paths[106192]); k2Fail(raw,"node guard "..i)
++    end
++    local raw=C.Copy(base); raw.tabs[1].paths[106192].node.isAvailable=false
++    eq(K.Evaluate(raw).complete,true,"availability boolean is not lock state")
++end)
++case("K2 active next committed locked and zero unlock state plus current and entry costs",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c)
++    local changes={
++        {106192,function(p) p.node.activeEntry=nil end},
++        {106192,function(p) p.node.activeEntry.entryID=p.spendEntryID end},
++        {106192,function(p) p.node.activeEntry.rank=0 end},
++        {106192,function(p) p.node.nextEntry=nil end},
++        {106192,function(p) p.node.nextEntry.entryID=p.unlockEntryID end},
++        {106192,function(p) p.node.nextEntry.rank=0 end},
++        {106192,function(p) p.node.nextEntry.rank=2147483648 end},
++        {106192,function(p) p.node.nextEntry.entryID=999 end},
++        {106192,function(p) p.costs={} end},
++        {106192,function(p) p.costs[1].amount=0 end},
++        {106192,function(p) p.costs[1].amount=2 end},
++        {106192,function(p) p.costs[1].ID=3900 end},
++        {106192,function(p) p.costs[2]={ID=3900,amount=1} end},
++        {106192,function(p) p.unlock.entryCostComplete=false end},
++        {106192,function(p) p.spend.entryCost=nil end},
++        {106192,function(p) p.unlock.entryCost={{ID=3902,amount=1}} end},
++        {106192,function(p) p.spend.entryCost={{ID=3902,amount=1}} end},
++        {106187,function(p) p.node.activeEntry.rank=1 end},
++        {106187,function(p) p.node.activeEntry.entryID=p.spendEntryID end},
++        {106187,function(p) p.node.nextEntry.entryID=p.spendEntryID end},
++        {106187,function(p) p.node.entryIDsWithCommittedRanks={p.unlockEntryID} end},
++        {106187,function(p) p.costs[1].ID=3902 end},
++        {106187,function(p) p.costs[1].ID=999 end},
++    }
++    for i,item in ipairs(changes) do
++        local raw=C.Copy(base); item[2](raw.tabs[1].paths[item[1]]); k2Fail(raw,"state/cost "..i)
++    end
++    for _,change in ipairs({
++        function(p) p.node.activeEntry.rank=5 end,
++        function(p) p.node.activeEntry.entryID=p.unlockEntryID end,
++        function(p) p.node.entryIDsWithCommittedRanks={p.unlockEntryID} end,
++    }) do local raw=C.Copy(base); change(raw.tabs[3].paths[109656]); k2Fail(raw,"partial active") end
++    local raw=C.Copy(base); raw.tabs[2].paths[106280].node.nextEntry={entryID=131037,rank=10}; k2Fail(raw,"max next")
++end)
++case("K2 complete64 currencies sharedlast beyond8 and all shared mismatches excluded once",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c)
++    for _,tab in ipairs(base.tabs) do
++        local row=table.remove(tab.currencies,1)
++        while #tab.currencies<63 do tab.currencies[#tab.currencies+1]={traitCurrencyID=9000+#tab.currencies,quantity=0,spent=0} end
++        tab.currencies[64]=row
++    end
++    eq(K.Evaluate(base).complete,true); eq(#base.tabs[4].currencies,64)
++    local changes={
++        function(s) s.tabs[1].currenciesComplete=false end,
++        function(s) s.tabs[1].currencies[64].spent=265 end,
++        function(s) s.tabs[1].currencies[64].quantity=1 end,
++        function(s) for _,t in ipairs(s.tabs) do t.currencies[64].spent=265 end end,
++        function(s) s.tabs[1].currencies[64]=nil end,
++        function(s) s.tabs[1].currencies[63]=C.Copy(s.tabs[1].currencies[64]) end,
++        function(s) s.tabs[1].currencies[65]={traitCurrencyID=99999,quantity=0,spent=0} end,
++        function(s) s.tabs[1].paths[106192].spendCurrencyID=3900 end,
++        function(s) s.tabs[1].currencies[64].spent=nil end,
++    }
++    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"shared guard "..i) end
++    base.shared={applicable=true,spent=999}; eq(K.Evaluate(base).sharedSpent,264,"ignore K1/raw supplied match authority")
++end)
++case("K2 unsupported policy scope source config and boundary flags cannot fall through legacy",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c)
++    for _,value in ipairs({false,true,1,"unknown","verified-unit-spend"}) do
++        local raw=C.Copy(base); raw.policy=value; k2Fail(raw,"policy")
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),false)
++    end
++    local changes={
++        function(s) s.identity.skillLineID=999 end,function(s) s.identity.parentID=999 end,
++        function(s) s.identity.profession=999 end,function(s) s.identity.expansionID=10 end,
++        function(s) s.configID=nil end,function(s) s.configID=0 end,function(s) s.configID=2147483648 end,
++        function(s) s.sourceCounter=nil end,function(s) s.sourceCounter=-1 end,
++        function(s) s.nativeComplete=false end,function(s) s.tabsComplete=false end,function(s) s.stable=false end,
++        function(s) s.stagedStart=nil end,function(s) s.stagedStart=true end,
++        function(s) s.stagedEnd=nil end,function(s) s.stagedEnd=true end,
++    }
++    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"boundary "..i) end
++    local legacy=scan(); legacy.tabs[1].paths[72].children={73}
++    eq(K.Evaluate(legacy).complete,true); legacy.policy=false; k2Fail(legacy,"no policy bypass")
++end)
++case("K2 graph coverage cycles shared paths duplicate tabs unreachable and all list bounds",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c)
++    local changes={
++        function(s) s.tabs[1].coverageComplete=false end,
++        function(s) s.tabs[1].paths[106192].children={106192} end,
++        function(s) s.tabs[1].paths[106192].children={106191,106191} end,
++        function(s) s.tabs[1].paths[106192].children={999} end,
++        function(s) s.tabs[1].paths[999]=C.Copy(s.tabs[1].paths[106192]) end,
++        function(s) s.tabs[1].paths[106191]=nil end,
++        function(s) s.tabs[2].root=106192; s.tabs[2].paths[106192]=C.Copy(s.tabs[1].paths[106192]) end,
++        function(s) s.tabs[2].id=s.tabs[1].id end,
++        function(s) for i=5,9 do s.tabs[i]=C.Copy(s.tabs[1]) end end,
++        function(s) s.tabs.extra={} end,
++        function(s) s.tabs[2]=nil end,
++        function(s) s.tabs[1].paths[106192].children[17]=999 end,
++        function(s) s.tabs[1].paths[106192].node.entryIDs[33]=999 end,
++        function(s) s.tabs[1].paths[106192].costs[17]={ID=999,amount=1} end,
++        function(s) s.tabs[1].paths[106192].node.entryIDToRanksIncreased[999]=0 end,
++    }
++    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"graph/list "..i) end
++    for _,where in ipairs({"children","costs"}) do
++        local raw=C.Copy(base); setmetatable(raw.tabs[1].paths[106192][where],{}); k2Fail(raw,"metatable "..where)
++    end
++    local raw=C.Copy(base); setmetatable(raw.tabs,{}); k2Fail(raw,"metatable tabs")
++end)
++case("K2 raw projection omits malformed fields with false flags and always typed Core input",function()
++    local changes={
++        function(f) f.nodes[106192].ID=false end,
++        function(f) f.nodes[106192].ID=999 end,
++        function(f) f.nodes[106192].type="1" end,
++        function(f) f.nodes[106192].flags=-1 end,
++        function(f) f.nodes[106192].ranksPurchased=nil end,
++        function(f) f.nodes[106192].isAvailable=1 end,
++        function(f) f.nodes[106192].activeEntry={entryID=130942,rank="1"} end,
++        function(f) f.nodes[106192].nextEntry=false end,
++        function(f) f.entries[130942].maxRanks=-1 end,
++        function(f) f.entries[130933].type=false end,
++        function(f) f.entries[130933].entryCost=nil end,
++        function(f) f.costs[106192]={{ID=3902,amount=false}} end,
++        function(f) f.currency[106192]=false end,
++        function(f) f.unlock[106192]=2147483648 end,
++        function(f) f.spend[106192]=0 end,
++        function(f) f.nodes[106192].entryIDs={130942,130942} end,
++        function(f) f.nodes[106192].entryIDToRanksIncreased={[130942]=0,[130933]=false} end,
++        function(f) f.currencies[1122][1].quantity=-1 end,
++    }
++    for i,change in ipairs(changes) do
++        local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c)
++        eq(raw.nativeComplete,false,"project failure "..i); k2Fail(raw,"project failure "..i)
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"sanitized typed raw "..i)
++        local obs={knowledgeRaw=C.Observation("observed",raw,100,"fixture")}
++        assert(C.Apply(c.db,character,identity,obs,100,"fixture"),"safe partial raw is persistable "..i)
++    end
++end)
++case("K2 protected missing nil throwing APIs sanitize without secrets and mark all trees unknown",function()
++    for _,pathName in ipairs({"GetNodeInfo","GetEntryInfo","GetNodeCost","GetTreeCurrencyInfo"}) do
++        for _,mode in ipairs({"missing","nil","error"}) do
++            local env,_,_,c=k2Fixture()
++            env.C_Traits[pathName]=mode=="missing" and nil or function()
++                if mode=="error" then error("K2-PRIVATE-ERROR") end
++            end
++            -- Lua's and/or cannot represent nil; explicitly remove missing functions.
++            if mode=="missing" then env.C_Traits[pathName]=nil end
++            local raw=k2Raw(c); eq(raw.nativeComplete,false); k2Fail(raw,pathName..mode)
++            eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++            assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
++            for _,t in ipairs(raw.tabs) do eq(g.fields["tree:"..t.id].last,nil) end
++            assert(not c.reason:find("K2-PRIVATE-ERROR",1,true)); eq(g.fields.skill.last.value.skillLevel,0)
++        end
++    end
++end)
++case("K2 every projection list boundary dense malformed and inspection limited prefix",function()
++    local function makeIDs(n) local a={}; for i=1,n do a[i]=800000+i end; return a end
++    for _,n in ipairs({16,17}) do
++        local _,_,f,c=k2Fixture(); f.costs[106192]={}
++        for i=1,n do f.costs[106192][i]={ID=800000+i,amount=1} end
++        local raw=k2Raw(c); eq(#raw.tabs[1].paths[106192].costs,math.min(n,16))
++        eq(raw.tabs[1].paths[106192].metadataComplete,n==16); k2Fail(raw,"multiple cost not eligible")
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++        local _,_,entryFixture,entryCollector=k2Fixture()
++        entryFixture.entries[130933].entryCost=C.Copy(f.costs[106192])
++        local entryRaw=k2Raw(entryCollector); local entryPath=entryRaw.tabs[1].paths[106192]
++        eq(#entryPath.spend.entryCost,math.min(n,16)); eq(entryPath.spend.entryCostComplete,n==16)
++        eq(C.ValidPayload("knowledgeRaw",entryRaw,"observed"),true); k2Fail(entryRaw,"entry-specific costs")
++    end
++    for _,n in ipairs({32,33}) do
++        local _,_,f,c=k2Fixture(); f.nodes[106192].entryIDs=makeIDs(n)
++        f.nodes[106192].entryIDsWithCommittedRanks=makeIDs(n); f.nodes[106192].entryIDToRanksIncreased={}
++        for i=1,n do f.nodes[106192].entryIDToRanksIncreased[800000+i]=0 end
++        local raw=k2Raw(c); local p=raw.tabs[1].paths[106192]
++        eq(#p.node.entryIDs,math.min(n,32)); eq(p.metadataComplete,n==32)
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true); k2Fail(raw,"unexpected entry structure")
++    end
++    for _,n in ipairs({64,65}) do
++        local _,_,f,c=k2Fixture()
++        for _,rows in pairs(f.currencies) do
++            local shared=table.remove(rows,1)
++            while #rows<n-1 do rows[#rows+1]={traitCurrencyID=800000+#rows,quantity=0,spent=0} end
++            rows[n]=shared
++        end
++        local raw=k2Raw(c); eq(#raw.tabs[4].currencies,64); eq(raw.tabs[4].currenciesComplete,n==64)
++        eq(K.Evaluate(raw).complete,n==64); eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++    end
++    for _,malform in ipairs({
++        function(a) a[3]=C.Copy(a[1]); a[2]=nil end,function(a) a.extra=true end,function(a) a[1]=false end,
++        function(a) a[2]=a[1] end,function(a) setmetatable(a,{}) end,
++    }) do
++        for _,kind in ipairs({"children","entries","currencies","costs"}) do
++            local _,_,f,c=k2Fixture()
++            local a=kind=="children" and f.children[106192] or kind=="entries" and f.nodes[106192].entryIDs or
++                kind=="currencies" and f.currencies[1122] or f.costs[106192]
++            if #a==1 then a[2]=C.Copy(a[1]) end
++            malform(a); local raw=k2Raw(c); k2Fail(raw,kind)
++            eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"bounded sanitized "..kind)
++        end
++    end
++end)
++case("K2 path children and tab projection bounds cycles and shared ownership never partial totals",function()
++    for _,n in ipairs({64,65}) do
++        local env,_,f,c=k2Fixture()
++        f.tabs={f.tabs[1]}; local template=f.nodes[106192]
++        for i=1,n do
++            local id=600000+i; local node=C.Copy(template); node.ID=id; f.nodes[id]=node
++            f.unlock[id]=130942; f.spend[id]=130933; f.currency[id]=3902; f.costs[id]={{ID=3902,amount=1}}
++            f.children[id]=i<n and {id+1} or {}
++        end
++        env.C_ProfSpecs.GetRootPathForTab=function() return 600001 end
++        f.currencies[1122][1].spent=0
++        local raw=k2Raw(c); local count=0; for _ in pairs(raw.tabs[1].paths) do count=count+1 end
++        eq(count,64); eq(raw.tabs[1].coverageComplete,n==64); eq(K.Evaluate(raw).complete,n==64)
++    end
++    for _,n in ipairs({8,9}) do
++        local env,_,_,c=k2Fixture()
++        env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() local a={}; for i=1,n do a[i]=1000+i end; return a end
++        local raw=k2Raw(c); eq(#raw.tabs,8); eq(raw.tabsComplete,n==8); k2Fail(raw,"tab bound no roots")
++    end
++    for _,n in ipairs({16,17}) do
++        local _,_,f,c=k2Fixture(); f.children[106192]={}
++        for i=1,n do f.children[106192][i]=700000+i end
++        local raw=k2Raw(c); eq(#raw.tabs[1].paths[106192].children,math.min(n,16))
++        eq(raw.tabs[1].paths[106192].childrenComplete,n==16); k2Fail(raw,"unknown child metadata")
++    end
++    for _,change in ipairs({
++        function(f) f.children[106192]={106192} end,
++        function(f) f.children[106192]={106191,106191} end,
++        function(f) f.children[106280]={106191} end,
++    }) do local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c); eq(raw.nativeComplete,false); k2Fail(raw) end
++end)
++case("K2 actual nonfinite projection and direct raw or provenance payloads reject atomically",function()
++    for _,sample in ipairs(nonfiniteSamples()) do
++        for _,target in ipairs({"rank","cost","currency","entry","map","source"}) do
++            local _,s,f,c=k2Fixture(); local v=sample.value
++            if target=="rank" then f.nodes[106192].ranksPurchased=v
++            elseif target=="cost" then f.costs[106192][1].amount=v
++            elseif target=="currency" then f.currencies[1122][1].spent=v
++            elseif target=="entry" then f.entries[130942].maxRanks=v
++            elseif target=="map" then f.nodes[106192].entryIDToRanksIncreased[130942]=v
++            else s.info.sourceCounter=v end
++            local raw=k2Raw(c); k2Fail(raw,target..sample.name)
++            eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"sanitized nonfinite "..target)
++        end
++        local _,_,_,c=k2Fixture(); local raw=k2Raw(c); local r=K.Evaluate(raw)
++        for _,target in ipairs({"raw","tree"}) do
++            local obs=k2Observations(raw,r,100); local db=C.Open(nil); local verify=unchangedGraph(db)
++            if target=="raw" then obs.knowledgeRaw.value.sourceCounter=sample.value
++            else obs["tree:1122"].value.accountingEvidence.quantity=sample.value end
++            eq(C.Apply(db,character,identity,obs,100,"fixture"),nil,target..sample.name); verify()
++            -- Inputs are caller-owned; recreate them after deliberately corrupting raw.
++            raw=k2Raw(c); r=K.Evaluate(raw)
++        end
++    end
++end)
++case("K2 Core typed new raw metadata and complete tree evidence rejects malformed direct scans",function()
++    local _,_,_,c=k2Fixture(); local base=k2Raw(c); local result=K.Evaluate(base)
++    local changes={
++        function(o) o.knowledgeRaw.value.nativeComplete=1 end,
++        function(o) o.knowledgeRaw.value.sourceCounter="1" end,
++        function(o) o.knowledgeRaw.value.sourceCounter=nil end,
++        function(o) o.knowledgeRaw.value.identity.parentID=false end,
++        function(o) o.knowledgeRaw.value.tabs[1].currenciesComplete="true" end,
++        function(o) o.knowledgeRaw.value.tabs[1].currencyCount=false end,
++        function(o) o.knowledgeRaw.value.tabs[1].currencyStatus=false end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].metadataComplete="true" end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].node.activeRank=false end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].node.entryIDsWithCommittedRanks={false} end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].node.nextEntry={entryID=130933,rank=false} end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].node.entryIDToRanksIncreased={[130942]=false} end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].spendEntryID=0 end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].spendCurrencyID=2147483648 end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].spend.entryCost=nil end,
++        function(o) o.knowledgeRaw.value.tabs[1].paths[106192].unlock.entryCost={{ID=3902,amount=false}} end,
++        function(o) o["tree:1122"].value.accountingPolicy="unknown" end,
++        function(o) o["tree:1122"].value.accountingEvidence=nil end,
++        function(o) o["tree:1122"].value.accountingEvidence.sourcePin="wrong" end,
++        function(o) o["tree:1122"].value.accountingEvidence.spent=265 end,
++        function(o) o["tree:1122"].value.accountingEvidence.currencyID=0 end,
++        function(o) o["tree:1122"].value.paths[1].purchased=1; o["tree:1122"].value.purchased=1 end,
++        function(o) o["tree:1122"].value.paths[1].capacity=31; o["tree:1122"].value.capacity=271 end,
++        function(o) o["tree:1122"].value.paths[1].node.entryIDs={999,130933} end,
++        function(o) o["tree:1122"].value.currencies[1].quantity=1 end,
++    }
++    for i,change in ipairs(changes) do
++        local obs=C.Copy(k2Observations(base,result,100)); change(obs)
++        local db=dbWith({unspent=8}); local verify=unchangedGraph(db)
++        eq(C.Apply(db,character,identity,obs,100,"fixture"),nil,"atomic malformed new "..i); verify()
++    end
++end)
++case("K2 Core reload archive wrong-scope native values reject untouched and legacy schema1 stays valid",function()
++    local _,_,_,c=k2Fixture(); local raw=k2Raw(c); local r=K.Evaluate(raw)
++    local db=C.Open(nil); assert(C.Apply(db,character,identity,k2Observations(raw,r,100),100,"fixture"))
++    eq(C.Open(db),db); assert(C.Archive(db,character.guid,2913,110,"fixture")); eq(C.Open(db),db)
++    for _,mode in ipairs({"active","archive"}) do
++        for _,target in ipairs({"scope","raw","tree"}) do
++            local copy=C.Copy(db); local p=copy.characters[character.guid].professions[2913]
++            local g=p.archives[1]
++            if mode=="active" then p.active=g; p.archives={}; g.archivedAt=nil; g.archiveReason=nil end
++            if target=="scope" then g.identity.expansionID=10
++            elseif target=="raw" then g.fields.knowledgeRaw.last.value.tabs[1].paths[106192].spend.type=false
++            else g.fields["tree:1122"].last.value.accountingEvidence.totalPurchased=0 end
++            local verify=unchangedGraph(copy); eq(C.Open(copy),nil,mode..target); verify()
++        end
++    end
++    for _,key in ipairs({"skillLineID","parentID","profession","expansionID"}) do
++        local wrong=C.Copy(identity); wrong[key]=999
++        local empty=C.Open(nil); local verify=unchangedGraph(empty)
++        eq(C.Apply(empty,character,wrong,k2Observations(raw,r,100),100,"fixture"),nil,"incoming scope "..key); verify()
++    end
++    local old=dbWith({knowledgeRaw=scan(),["tree:11"]=treeValue(11,0,10)})
++    eq(C.Open(old),old,"old schema1 no migration or native inference")
++end)
++case("K2 successful scan reload archive hover keeps native zero own evidence time and unspent separate",function()
++    local _,s,_,c=k2Fixture(); assert(c:Scan())
++    local g=c.db.characters[character.guid].professions[2913].active
++    eq(g.fields["tree:1122"].last.value.purchased,0); eq(g.fields["tree:1122"].last.observedAt,100)
++    eq(g.fields.unspent.last.value,0); assert(c.reason:find("shared-spent reconciled",1,true))
++    local rows=NS.ViewModel.Build(c.db,c.fresh,{},100); eq(#rows,1); eq(rows[1].trees[1].ratio,0)
++    eq(rows[1].trees[1].state.fresh,true); local text=table.concat(rows[1].trees[1].tooltip,"\n")
++    assert(text:find("NOT verified future/all-rank costs",1,true)); assert(text:find("compared ONCE",1,true))
++    assert(text:find("locked; unlock token 3912 distinct from spend currency 3902",1,true))
++    local reopened=C.Copy(c.db); eq(C.Open(reopened),reopened)
++    rows=NS.ViewModel.Build(reopened,{}, {},101); eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].purchased,0)
++    assert(C.Archive(reopened,character.guid,2913,110,"fixture")); eq(C.Open(reopened),reopened)
++    eq(#NS.ViewModel.Build(reopened,{}, {},111),0)
++    rows=NS.ViewModel.Build(reopened,{}, {archived=true},111); eq(#rows,1); eq(rows[1].trees[1].purchased,0)
++    eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].state.observedAt,100)
++    s.at=120; assert(c:Scan()); eq(g.fields["tree:1122"].last.observedAt,100,"old returned generation not mutated")
++end)
++case("K2 failed scan preserves ALL coherent trees omitted prior tabs index and nonfresh timestamps",function()
++    for _,mode in ipairs({"mismatch","missingtab","partialtabs","metadata"}) do
++        local env,s,f,c=k2Fixture(); assert(c:Scan())
++        local old=c.db.characters[character.guid].professions[2913].active
++        local saved=C.Copy(old); s.at=120
++        if mode=="mismatch" then f.currencies[1124][1].spent=999
++        elseif mode=="metadata" then f.entries[130933].entryCost=nil
++        elseif mode=="partialtabs" then env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() return nil end
++        else f.tabs={f.tabs[1]}; f.currencies[1122][1].spent=264 end
++        assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
++        for _,id in ipairs({1122,1124,1182,1125}) do
++            local field=g.fields["tree:"..id]; eq(field.last.observedAt,100,mode)
++            eq(field.last.value.purchased,saved.fields["tree:"..id].last.value.purchased,mode)
++            eq(field.attempt.status,"unknown"); eq(field.attempt.attemptedAt,120)
++            eq(c.fresh[character.guid..":2913"].fields["tree:"..id],nil)
++        end
++        if mode=="partialtabs" then eq(g.fields.knowledgeIndex.last.observedAt,100); eq(#g.fields.knowledgeIndex.last.value,4) end
++        local rows=NS.ViewModel.Build(c.db,c.fresh,{},120)
++        eq(rows[1].trees[1].state.stale,true); eq(rows[1].trees[1].state.fresh,false)
++        local text=table.concat(rows[1].trees[1].tooltip,"\n")
++        assert(text:find("Observed tree at 100",1,true)); assert(text:find("spent 264",1,true))
++        assert(not text:find("spent 999",1,true),"retained tree never borrows latest raw")
++        assert(c.reason:find("unknown or stale",1,true))
++    end
++    local _,_,f,c=k2Fixture(); f.currencies[1124][1].spent=999; assert(c:Scan())
++    local rows=NS.ViewModel.Build(c.db,c.fresh,{},100)
++    for _,t in ipairs(rows[1].trees) do eq(t.purchased,nil); eq(t.ratio,nil); eq(t.state.known,false) end
++end)
++case("K2 changing identity source config revision and serial discard including reentrant scan",function()
++    for _,mode in ipairs({"identity","source","config","revision","serial","closed"}) do
++        local env,s,_,c=k2Fixture(); local original=env.C_Traits.GetNodeCost; local once=false
++        env.C_Traits.GetNodeCost=function(...)
++            if not once then
++                once=true
++                if mode=="identity" then env.UnitGUID=function() return "Player-Changed" end
++                elseif mode=="source" then s.info.sourceCounter=s.info.sourceCounter+1
++                elseif mode=="config" then env.C_ProfSpecs.GetConfigIDForSkillLine=function() return 2001 end
++                elseif mode=="revision" then c.revision=c.revision+1
++                elseif mode=="serial" then c.serial=c.serial+1
++                else s.shown=false end
++            end
++            return original(...)
++        end
++        eq(c:Scan(),false,mode); eq(next(c.db.characters),nil,mode); eq(next(c.fresh),nil,mode)
++    end
++    local env,s,_,c=k2Fixture(); local original=env.C_Traits.GetNodeInfo; local nested=false
++    env.C_Traits.GetNodeInfo=function(...)
++        if not nested then nested=true; s.at=101; assert(c:Scan()); s.at=102 end
++        return original(...)
++    end
++    eq(c:Scan(),false,"outer reentrant scan discarded")
++    local g=c.db.characters[character.guid].professions[2913].active
++    eq(g.scannedAt,101,"only coherent inner scan committed"); eq(g.fields["tree:1122"].last.observedAt,101)
++    eq(next(c.fresh),nil,"outer invalidation cannot revive fresh tree")
++end)
++case("K2 staged unknown unavailable source and unsafe contexts stay nonnumeric without harming gear",function()
++    for _,mode in ipairs({"starttrue","startnil","endtrue","endnil","stageerror","sourcenil","sourcefalse"}) do
++        local env,s,_,c=k2Fixture(); local calls=0
++        env.C_Traits.ConfigHasStagedChanges=function()
++            calls=calls+1
++            if mode=="stageerror" then error("K2 private staging") end
++            if mode=="startnil" and calls==1 or mode=="endnil" and calls==2 then return nil end
++            if mode=="starttrue" and calls==1 or mode=="endtrue" and calls==2 then return true end
++            return false
++        end
++        if mode=="sourcenil" then s.info.sourceCounter=nil elseif mode=="sourcefalse" then s.info.sourceCounter=false end
++        assert(c:Scan(),mode)
++        local g=c.db.characters[character.guid].professions[2913].active
++        for _,id in ipairs({1122,1124,1182,1125}) do eq(g.fields["tree:"..id].last,nil,mode) end
++        eq(g.fields.tool.last.value.rarity,3); eq(g.fields.moxie.last.value.quantity,0)
++        eq(g.fields.concentration.last.value.quantity,0); eq(g.fields.skill.last.value.skillLevel,0)
++    end
++    for _,key in ipairs({"combat","linked","guild","npc","changing","ready","shown"}) do
++        local _,s,_,c=k2Fixture(); s[key]=not s[key]; local verify=unchangedGraph(c.db)
++        eq(c:Scan(),false,key); verify(); eq(s.requests,0); eq(#s.timers,0)
++    end
++    local _,_,_,c=k2Fixture(); c.db=nil; eq(c:Scan(),false,"missing DB no reset")
++    local env,_,_,known=k2Fixture(); env.C_ProfSpecs.GetCurrencyInfoForSkillLine=function() return nil end
++    assert(known:Scan()); local g=known.db.characters[character.guid].professions[2913].active
++    eq(g.fields.unspent.last,nil,"no unspent fabrication"); eq(g.fields["tree:1122"].last.value.purchased,0)
++end)
++
++case("K2 finite scalar ranges nullable failures and metatable node entry map projection",function()
++    local setters={
++        function(f,v) f.nodes[106192].ID=v end,
++        function(f,v) f.nodes[106192].ranksPurchased=v end,
++        function(f,v) f.nodes[106192].activeRank=v end,
++        function(f,v) f.nodes[106192].activeEntry.rank=v end,
++        function(f,v) f.nodes[106192].nextEntry.entryID=v end,
++        function(f,v) f.nodes[106192].entryIDToRanksIncreased[130942]=v end,
++        function(f,v) f.entries[130933].maxRanks=v end,
++        function(f,v) f.costs[106192][1].amount=v end,
++        function(f,v) f.costs[106192][1].ID=v end,
++        function(f,v) f.currencies[1122][1].quantity=v end,
++        function(f,v) f.currencies[1122][1].spent=v end,
++        function(f,v) f.currencies[1122][1].maxQuantity=v end,
++        function(f,v) f.unlock[106192]=v end,
++        function(f,v) f.spend[106192]=v end,
++        function(f,v) f.currency[106192]=v end,
++    }
++    for i,set in ipairs(setters) do
++        for _,value in ipairs({-1,0.5,2147483648,"1",false}) do
++            local _,_,f,c=k2Fixture(); set(f,value); local raw=k2Raw(c)
++            eq(raw.nativeComplete,false,"range projection "..i); k2Fail(raw,"range projection "..i)
++            eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"range sanitization "..i)
++        end
++    end
++    for _,change in ipairs({
++        function(f) setmetatable(f.nodes[106192],{}) end,
++        function(f) setmetatable(f.entries[130942],{}) end,
++        function(f) setmetatable(f.nodes[106192].entryIDToRanksIncreased,{}) end,
++    }) do
++        local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c); k2Fail(raw)
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++    end
++    for _,sample in ipairs(nonfiniteSamples()) do
++        local _,_,_,c=k2Fixture(); c.serial=sample.value; eq(c:Scan(),false); eq(next(c.db.characters),nil)
++    end
++end)
++case("K2 missing nil throwing specialization reads remain bounded typed unknown not observed empty",function()
++    for _,name in ipairs({"GetSpecTabIDsForSkillLine","GetTabInfo","GetRootPathForTab","GetChildrenForPath",
++        "GetUnlockEntryForPath","GetSpendEntryForPath","GetSpendCurrencyForPath"}) do
++        for _,mode in ipairs({"missing","nil","error"}) do
++            local env,_,_,c=k2Fixture()
++            env.C_ProfSpecs[name]=function() if mode=="error" then error("K2-PRIVATE-API") end end
++            if mode=="missing" then env.C_ProfSpecs[name]=nil end
++            local raw=k2Raw(c); eq(raw.nativeComplete,false,name..mode); k2Fail(raw,name..mode)
++            eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,name..mode)
++            assert(c:Scan(),name..mode); assert(not c.reason:find("K2-PRIVATE-API",1,true))
++        end
++    end
++end)
++
++case("K2 global copy budget rejects oversized payload atomically and scan retains failed tree history",function()
++    local _,s,_,c=k2Fixture(); assert(c:Scan()); s.at=120
++    local raw=k2Raw(c); raw.oversized={}
++    for i=1,50001 do raw.oversized[i]=0 end
++    local verify=unchangedGraph(c.db)
++    eq(C.Apply(c.db,character,identity,{knowledgeRaw=C.Observation("observed",raw,120,"fixture")},120,"fixture"),nil)
++    verify()
++    c.Knowledge=function() return raw end
++    assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
++    eq(g.fields.knowledgeRaw.last.observedAt,100); eq(g.fields.knowledgeRaw.attempt.status,"unknown")
++    for _,id in ipairs({1122,1124,1182,1125}) do
++        local f=g.fields["tree:"..id]; eq(f.last.observedAt,100); eq(f.attempt.status,"unknown")
++        eq(c.fresh[character.guid..":2913"].fields["tree:"..id],nil)
++    end
++end)
++
++-- K2 review corrections: next rank uses its observed bounded units, not active
++-- entry-local purchased-point units. This is a synthetic boundary, not client proof.
++local function k2NearCapFixture()
++    local env,s,f,c=k2Fixture()
++    local n=f.nodes[106192]
++    n.ranksPurchased=30; n.currentRank=30; n.activeRank=30
++    n.activeEntry={entryID=f.spend[106192],rank=29}
++    n.nextEntry={entryID=f.spend[106192],rank=31}
++    n.entryIDsWithCommittedRanks={f.spend[106192]}
++    for _,rows in pairs(f.currencies) do rows[1].spent=293 end
++    return env,s,f,c
++end
++case("K2 correction near-cap next31 and MAX are separate evidence in pure Core and collector",function()
++    for _,nextRank in ipairs({31,2147483647}) do
++        local _,_,f,c=k2NearCapFixture(); f.nodes[106192].nextEntry.rank=nextRank
++        local raw=k2Raw(c); local p=raw.tabs[1].paths[106192]
++        eq(p.node.ranksPurchased,30); eq(p.node.maxRanks,31); eq(p.spend.maxRanks,30)
++        eq(p.node.activeEntry.rank,29); eq(p.node.nextEntry.rank,nextRank)
++        eq(K.NativePathPoints(p,raw.tabs[1]).purchased,29)
++        local result=K.Evaluate(raw); eq(result.complete,true); eq(result.sharedSpent,293)
++        eq(result.trees[1].purchased,29); eq(result.trees[1].capacity,270)
++        local db=C.Open(nil); assert(C.Apply(db,character,identity,k2Observations(raw,result,100),100,"fixture"))
++        eq(C.Open(db),db)
++        assert(c:Scan()); eq(C.Open(c.db),c.db)
++        local tree=c.db.characters[character.guid].professions[2913].active.fields["tree:1122"]
++        eq(tree.last.value.purchased,29); eq(tree.last.value.paths[1].node.nextEntry.rank,nextRank)
++        eq(c.fresh[character.guid..":2913"].fields["tree:1122"],true)
++    end
++end)
++case("K2 correction next zero nonfinite overflow foreign or wrong-state still fails without relaxing active",function()
++    local changes={
++        function(p) p.node.nextEntry.rank=0 end,
++        function(p) p.node.nextEntry.rank=-1 end,
++        function(p) p.node.nextEntry.rank=0.5 end,
++        function(p) p.node.nextEntry.rank=2147483648 end,
++        function(p) p.node.nextEntry.entryID=999 end,
++        function(p) p.node.nextEntry.entryID=p.unlockEntryID end,
++        function(p) p.node.activeEntry.rank=30 end,
++        function(p) p.node.activeEntry.rank=31 end,
++    }
++    for _,sample in ipairs(nonfiniteSamples()) do
++        local value=sample.value
++        changes[#changes+1]=function(p) p.node.nextEntry.rank=value end
++    end
++    for i,change in ipairs(changes) do
++        local _,_,_,c=k2NearCapFixture(); local raw=k2Raw(c); local result=K.Evaluate(raw)
++        local originalRaw=C.Copy(raw)
++        change(raw.tabs[1].paths[106192]); k2Fail(raw,"next/active guard "..i)
++        change(result.trees[1].paths[1])
++        local db=C.Open(nil); local verify=unchangedGraph(db)
++        eq(C.Apply(db,character,identity,k2Observations(originalRaw,result,100),100,"fixture"),nil,"direct next/active reject "..i)
++        verify()
++    end
++end)
++case("K2 correction every failed native index retains four visible stale trees own names and evidence",function()
++    for _,mode in ipairs({"reduced","nilname","errorname","changedname"}) do
++        local env,s,f,c=k2Fixture(); assert(c:Scan())
++        local prior=c.db.characters[character.guid].professions[2913].active
++        -- Deliberately distinct index labels exercise the own-tree name preference.
++        for _,row in ipairs(prior.fields.knowledgeIndex.last.value) do row.name="Index alias "..row.id end
++        local saved=C.Copy(prior); s.at=120
++        if mode=="reduced" then f.tabs={f.tabs[1]} end
++        if mode=="nilname" then env.C_ProfSpecs.GetTabInfo=function() return nil end
++        elseif mode=="errorname" then env.C_ProfSpecs.GetTabInfo=function() error("PRIVATE-NAME-ERROR") end
++        else env.C_ProfSpecs.GetTabInfo=function() return {name="Failed new label"} end end
++        if mode=="changedname" then f.currencies[1124][1].spent=999 end
++        assert(c:Scan(),mode); local g=c.db.characters[character.guid].professions[2913].active
++        local index=g.fields.knowledgeIndex
++        eq(index.attempt.status,"unknown"); eq(index.attempt.attemptedAt,120); eq(index.last.observedAt,100)
++        assert(deepEqual(index.last.value,saved.fields.knowledgeIndex.last.value),"whole index retained "..mode)
++        eq(c.fresh[character.guid..":2913"].fields.knowledgeIndex,nil)
++        local rows=NS.ViewModel.Build(c.db,c.fresh,{},120); eq(#rows[1].trees,4,mode)
++        for _,tree in ipairs(rows[1].trees) do
++            local before=saved.fields["tree:"..tree.id].last
++            local after=g.fields["tree:"..tree.id]
++            eq(after.attempt.status,"unknown"); eq(after.attempt.attemptedAt,120)
++            eq(after.last.observedAt,100); assert(deepEqual(after.last.value,before.value),"whole tree retained")
++            eq(tree.name,before.value.name); eq(tree.tooltip[1],before.value.name)
++            eq(tree.purchased,before.value.purchased); eq(tree.capacity,before.value.capacity)
++            eq(tree.state.stale,true); eq(tree.state.fresh,false); eq(tree.state.observedAt,100)
++            eq(c.fresh[character.guid..":2913"].fields["tree:"..tree.id],nil)
++            local text=table.concat(tree.tooltip,"\n")
++            assert(not text:find("Failed new label",1,true)); assert(not text:find("PRIVATE-NAME-ERROR",1,true))
++            assert(text:find("Observed tree at 100",1,true))
++        end
++    end
++end)
++case("K2 correction failed native scan with no prior index shows only safe unknown identities",function()
++    for _,mode in ipairs({"reduced","nilname","errorname"}) do
++        local env,_,f,c=k2Fixture()
++        if mode=="reduced" then f.tabs={f.tabs[1]}
++        elseif mode=="nilname" then env.C_ProfSpecs.GetTabInfo=function() return nil end
++        else env.C_ProfSpecs.GetTabInfo=function() error("PRIVATE-NAME-ERROR") end end
++        assert(c:Scan()); eq(C.Open(c.db),c.db)
++        local rows=NS.ViewModel.Build(c.db,c.fresh,{},100)
++        eq(#rows[1].trees,mode=="reduced" and 1 or 4)
++        for _,tree in ipairs(rows[1].trees) do
++            eq(tree.purchased,nil); eq(tree.capacity,nil); eq(tree.ratio,nil)
++            eq(tree.state.known,false); eq(tree.state.fresh,false)
++        end
++    end
++end)
++
++-- Match Core.Copy's value count for these acyclic plain fixtures (keys are not
++-- visited values). Derive padding from the actual native payload, not guessed size.
++local function k2ValueCount(value)
++    local count=1
++    if type(value)=="table" then for _,child in pairs(value) do count=count+k2ValueCount(child) end end
++    return count
++end
++local function k2CumulativeFixture(extra)
++    local _,_,_,collector=k2Fixture(); local raw=k2Raw(collector); local result=K.Evaluate(raw)
++    assert(result.complete)
++    local observations=k2Observations(raw,result,100)
++    local db=dbWith({unspent=8})
++    db.characters["Player-Fixture-Other"]={name="Other",realm="Synthetic",professions={}}
++    db.characters[character.guid].userMetadata={note="preserve character metadata"}
++    db.userMetadata={padding={},note="preserve unknown root data",flag=false,zero=0}
++    db.userFlag=false
++    local small=C.Copy(db)
++    assert(C.Apply(small,character,identity,observations,100,"fixture-build"))
++    local growth=k2ValueCount(small.characters[character.guid])-k2ValueCount(db.characters[character.guid])
++    assert(growth>1,"native payload increases assembled value count")
++    local padding=50000-k2ValueCount(db)-growth+extra
++    assert(C.Integer(padding,1),"positive boundary padding")
++    for i=1,padding do db.userMetadata.padding[i]=0 end
++    eq(k2ValueCount(db)+growth,50000+extra,"assembled boundary derived from actual candidate")
++    assert(C.Copy(db),"old data fits independently"); eq(C.Open(db),db)
++    assert(C.Copy({character,identity,observations}),"incoming native scan fits independently")
++    return db,observations
++end
++case("K2 correction assembled candidate over global budget rejects atomically preserving every reference",function()
++    local db,observations=k2CumulativeFixture(1)
++    local root,characters,old,metadata,other=db,db.characters,db.characters[character.guid],db.userMetadata,db.characters["Player-Fixture-Other"]
++    local generation=old.professions[2913].active
++    local verify=unchangedGraph(db)
++    local applied,why=C.Apply(db,character,identity,observations,100,"fixture-build")
++    eq(applied,nil); assert(why:find("Assembled snapshot",1,true),"clear bounded assembled-budget error")
++    verify(); eq(db,root); eq(db.characters,characters); eq(db.characters[character.guid],old)
++    eq(db.userMetadata,metadata); eq(db.userFlag,false); eq(db.userMetadata.flag,false); eq(db.userMetadata.zero,0)
++    eq(db.characters["Player-Fixture-Other"],other); eq(old.professions[2913].active,generation)
++    eq(generation.scannedAt,10); eq(generation.fields.unspent.last.value,8)
++    eq(C.Open(db),db,"old DB still opens after rejection")
++    local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(rows[1].unspent,8)
++    assert(C.Archive(db,character.guid,2913,110,"fixture management after rejection"))
++    eq(C.Open(db),db); eq(#NS.ViewModel.Build(db,{}, {},111),0)
++    eq(#NS.ViewModel.Build(db,{}, {archived=true},111),1)
++    assert(C.Delete(db,{guid=character.guid,id=2913,generation=1},true)); eq(C.Open(db),db)
++    eq(db.userMetadata,metadata); eq(db.characters["Player-Fixture-Other"],other)
++end)
++case("K2 correction assembled exact-budget native candidate fits reopens and preserves unrelated root keys",function()
++    local db,observations=k2CumulativeFixture(0)
++    local characters,metadata,other=db.characters,db.userMetadata,db.characters["Player-Fixture-Other"]
++    local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
++    eq(k2ValueCount(db),50000); eq(C.Open(db),db,"new native snapshot immediately reopens")
++    eq(db.characters,characters); eq(db.userMetadata,metadata); eq(db.userFlag,false)
++    eq(db.characters["Player-Fixture-Other"],other); eq(db.characters[character.guid].userMetadata.note,"preserve character metadata")
++    eq(g.scannedAt,100); eq(g.fields["tree:1122"].last.value.purchased,0)
++    local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(#rows[1].trees,4)
++    eq(rows[1].trees[1].purchased,0); eq(rows[1].trees[1].state.fresh,false)
++end)
++
++-- Alias-safe assembly fixtures retain all prior93 cases. Count every reachable
++-- alias occurrence just as Core.Copy does, while preserving original graph identity.
++local function k2AliasedCumulativeFixture(mode,extra)
++    local db,observations=k2CumulativeFixture(0)
++    db.userMetadata.padding={}
++    local old=db.characters[character.guid]
++    db.savedCharacter=old
++    local aliases=0
++    if mode=="root" or mode=="both" then db.userAlias=db.characters; aliases=aliases+1 end
++    if mode=="nested" or mode=="both" then
++        db.userMetadata.nested={charactersMap=db.characters}; aliases=aliases+1
++    end
++    db.sharedLabels={text="preserve shared primitive values",flag=false,zero=0}
++    db.secondaryLabels=db.sharedLabels
++    local small=C.Copy(db)
++    assert(C.Apply(small,character,identity,observations,100,"fixture-build"))
++    local growth=k2ValueCount(small.characters[character.guid])-k2ValueCount(old)
++    assert(growth>1)
++    local expandedGrowth=growth*(aliases+1)
++    local padding=50000-k2ValueCount(db)-expandedGrowth+extra
++    assert(C.Integer(padding,1))
++    for i=1,padding do db.userMetadata.padding[i]=0 end
++    eq(k2ValueCount(db)+expandedGrowth,50000+extra,"all map aliases see the new candidate")
++    if aliases>0 then
++        assert(k2ValueCount(db)+growth<=50000,"old shallow/alias-duplicating preflight would undercount and fit")
++    end
++    assert(C.Copy(db),"aliased old data fits independently"); eq(C.Open(db),db)
++    assert(C.Copy({character,identity,observations}),"incoming scan fits independently")
++    return db,observations
++end
++case("K2 alias mirror root nested and multiple map aliases reject cumulative expansion graph-identically",function()
++    for _,mode in ipairs({"root","nested","both"}) do
++        local db,observations=k2AliasedCumulativeFixture(mode,1)
++        local root,characters,old,metadata,other=db,db.characters,db.characters[character.guid],db.userMetadata,db.characters["Player-Fixture-Other"]
++        local verify=unchangedGraph(db)
++        local result,why=C.Apply(db,character,identity,observations,100,"fixture-build")
++        eq(result,nil,mode); assert(why:find("Assembled snapshot",1,true),mode)
++        verify(); eq(db,root); eq(db.characters,characters); eq(db.characters[character.guid],old)
++        eq(db.userMetadata,metadata); eq(db.savedCharacter,old); eq(old.professions[2913].active.scannedAt,10)
++        eq(db.characters["Player-Fixture-Other"],other)
++        if mode~="nested" then eq(db.userAlias,characters) end
++        if mode~="root" then eq(db.userMetadata.nested.charactersMap,characters) end
++        eq(db.sharedLabels,db.secondaryLabels); eq(db.sharedLabels.flag,false); eq(db.sharedLabels.zero,0)
++        eq(C.Open(db),db); local rows=NS.ViewModel.Build(db,{}, {},100)
++        eq(#rows,1); eq(rows[1].unspent,8)
++    end
++end)
++case("K2 alias mirror fitting root nested and multiple map aliases retain real identity and reopen",function()
++    for _,mode in ipairs({"root","nested","both"}) do
++        local db,observations=k2AliasedCumulativeFixture(mode,0)
++        local characters,old,metadata,labels,other=db.characters,db.characters[character.guid],db.userMetadata,db.sharedLabels,db.characters["Player-Fixture-Other"]
++        local oldUnchanged=unchangedGraph(old)
++        local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
++        eq(k2ValueCount(db),50000,mode); eq(C.Open(db),db)
++        eq(db.characters,characters); eq(db.userMetadata,metadata); eq(db.characters["Player-Fixture-Other"],other)
++        assert(db.characters[character.guid]~=old,"only the map key changes to the cloned candidate")
++        if mode~="nested" then eq(db.userAlias,characters); eq(db.userAlias[character.guid].professions[2913].active,g) end
++        if mode~="root" then eq(db.userMetadata.nested.charactersMap,characters); eq(db.userMetadata.nested.charactersMap[character.guid].professions[2913].active,g) end
++        eq(db.savedCharacter,old); oldUnchanged(); eq(old.professions[2913].active.scannedAt,10)
++        eq(db.sharedLabels,labels); eq(db.secondaryLabels,labels); eq(labels.flag,false); eq(labels.zero,0)
++        eq(g.scannedAt,100); eq(g.fields["tree:1122"].last.value.purchased,0)
++        local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(#rows[1].trees,4)
++    end
++end)
++case("K2 alias mirror old-character aliases remain old rather than rewritten to the candidate",function()
++    local db,observations=k2AliasedCumulativeFixture("old-character-only",0)
++    local old=db.characters[character.guid]; db.nestedOld={character=old}
++    -- Account for this additional unchanged alias without changing the fit target.
++    local remove=k2ValueCount(db.nestedOld)
++    for _=1,remove do db.userMetadata.padding[#db.userMetadata.padding]=nil end
++    eq(C.Open(db),db)
++    local before=unchangedGraph(old); local characters=db.characters; local nested=db.nestedOld
++    local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
++    eq(k2ValueCount(db),50000); eq(C.Open(db),db)
++    eq(db.characters,characters); eq(db.savedCharacter,old); eq(db.nestedOld,nested); eq(nested.character,old)
++    assert(db.characters[character.guid]~=old); before()
++    eq(old.professions[2913].active.fields.unspent.last.value,8)
++    eq(g.fields.unspent.last.value,0); eq(g.fields["tree:1122"].last.value.purchased,0)
++end)
++
+ function Tests.Run()
+     local results={passed=0, failed=0, lines={}}
+     for _, t in ipairs(Tests.cases) do
+# docs/dashboard/README.md baselineSHA256=9c1690a6e7eac46d910346ff55c3b86deea4a98d70a7c8a91b11b99a6386a4b3 targetSHA256=80e49eddff61ebb598d7321ea47cf963be001d10e611fdb8855ab71dfbb50bc2
+--- K1/docs/dashboard/README.md
++++ K2-corrected/docs/dashboard/README.md
+@@ -1,8 +1,9 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-Knowledge arithmetic is intentionally unknown until exact committed unit-cost
+-semantics are proven. Registry support for eight crafting families is not runtime
++K2 adds narrowly scoped Midnight Inscription native-rank/shared-spent-reconciled
++bars, subject to complete same-scan guards and review/user validation. This is NOT
++verified future/all-rank cost proof. Registry support for eight crafting families is not runtime
+ support for eight professions; only Midnight Inscription expansion identity is
+ currently mapped. Safe unknowns do not complete required fields.
+ 
+@@ -153,11 +154,64 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K1 knowledge evidence (current; user only, after independent review)
++### K2 native-rank bars (current; user only, after independent review)
++
++Version **0.2.0-mvp**, Interface **120105** and schema **1** stay unchanged. The prior
++K1 user **66/66** and complete native report are baseline evidence only. K2 defines
++**96 cases** (all66 byte-exact retained +30 K2 definitions, including9 review-correction
++cases); expanded Lua/client checks are
++**NOT RUN** until actually performed/supplied. Injected fixtures are not API proof.
++
++**Independent re-review pending:** the settled alias-safe correction is delivered,
++not independently verified or accepted. Primary must finish corrected frozen review
++and authorize the user retest before the following five-file update.
++
++1. After primary's independent K2 review, fully quit WoW and back up `WTF`, including
++   production and diagnostic SavedVariables. If already on K1, replace **only
++   `Core.lua`, `Knowledge.lua`, `Collectors.lua`, `ViewModel.lua`, `SelfTests.lua`**
++   in the existing CraftArmy folder with the reviewed files. Preserve all other
++   addon files, `CraftArmyDB`, all SavedVariables and all diagnostics. No reset,
++   schema edit, new dependency or gameplay action is needed.
++2. Login/reload and run `/ca selftest` **first**. Report actual counts, all complete
++   failure lines and any load/disabled-data error.96 is a definition count, not a
++   promised pass. Stop on failures; primary must record satisfactory results before
++   live comparison. `/cad selftest` remains independent; no fresh diagnostic run is
++   implied or needed to establish this production correction.
++3. Then open your own ready **Midnight Inscription**, out of combat, with **no pending
++   specialization changes**. Manually `/ca scan`, then `/ca`. Compare all four bars,
++   tree/path hover and separate unspent KP with the native UI. Report current values,
++   status/tooltip text and any mismatch. Historical264/870 is NOT an expected current
++   balance/capacity; never change ranks or saved data to force that match.
++4. Hover must identify **native rank points/shared-spent reconciled**, compare the
++   profession-wide shared spent **once**, and explicitly say **NOT verified
++   future/all-rank costs**. Locked paths show their distinct unlock token, not an
++   invented KP cost or lock state inferred from `isAvailable`. No purchases,
++   unlocking, spending or automatic profession switching is requested.
++5. Missing, malformed, staged, changing, truncated or mismatching inputs fail closed
++   for **every tree**. Existing coherent numbers/times remain stale/last observed;
++   the entire prior index and its time remain failed/last-observed too, so all prior
++   trees stay visible with retained tree names. Without prior numbers the bar stays
++   unknown, not zero. A known0/positive-cap bar
++   is genuine observed zero. Retained hovers use the retained tree's own evidence/time,
++   never newer raw ranks/currencies. Reload/offline/archive retains snapshot semantics,
++   not permanent freshness. Report failures rather than reset data.
++
++Production now captures all bounded currency rows (up to64/tab), costs16/node/entry,
++entries32/list/map and the full8tab/64path/16child graph, including locked branches.
++Only Inscription2913/773/profession13/expansion11 can use the new policy. Complete
++entry/rank/state/current-cost metadata, stable unstaged boundaries and identical
++shared rows across every tree are mandatory; other currencies never add to KP.
++Current unit costs are guards, not proof of future rank costs; `costRule` remains
++unknown, separate from this distinct policy. Other profession/field gates remain open.
++
++`/ca knowledgecheck` itself is unchanged: read-only, ephemeral and **PROVISIONAL**.
++It does not write snapshots, scan the dashboard or confer production eligibility.
++
++### K1 knowledge evidence (historical update instructions; command unchanged)
+ 
+ The prior corrected R6a **50/50** user fixture result and separate diagnostic **23/23**
+-are historical. K1 defines **66 cases** (all50 retained +16 new); its Lua/native tests
+-are **NOT RUN** until actual results are supplied. Injected APIs/widgets do not prove
++are historical. K1 defined **66 cases** (all50 retained +16 new); user66/66 and one
++complete native report are now recorded in evidence. Injected APIs/widgets do not prove
+ target-client behavior. Version0.2.0-mvp, Interface120105 and schema1 are unchanged.
+ 
+ 1. Wait for primary's independent K1 review. Fully quit WoW and back up `WTF` and
+@@ -205,11 +259,10 @@
+ **verified all-rank costs**. Even a provisional match compares one common shared
+ currency's identical committed spent balance **once**, not once per tab. Other
+ currencies stay separate; repeated rows are not per-tree allocations. Mismatch/unknown
+-does not adjust raw ranks or write snapshots. Numeric bars and production eligibility
+-remain unchanged/unknown pending separately reviewed semantic evidence and native UI
+-comparison. The normal snapshot collector still captures only its first8 currency
+-rows without raw truncation metadata; this command bypasses, but deliberately does
+-not repair or relabel, that existing evidence gap. Knowledgecheck does not alter the
++does not adjust raw ranks or write snapshots. K1 did not enable production numbers or
++repair the then-first8 production currency gap. K2 separately replaces that gap with
++complete bounded64 capture and the guarded native policy above; K1's report and
++provisional accounting remain unchanged. Knowledgecheck does not alter the
+ validated diagnostic addon, enable numbers, prove all ranks or complete T02 acceptance.
+ 
+ ### R6a fixture-only correction (historical update instructions)
+# docs/dashboard/schema.md baselineSHA256=5d5f0619d264c67abd8aa9ab202957f1b2753e17303f68f433978fae85bd288d targetSHA256=7f9e414fddc43c1533b5b05f0b09f39723e6f579f8506b3ab20b0162b22f23cb
+--- K1/docs/dashboard/schema.md
++++ K2-corrected/docs/dashboard/schema.md
+@@ -127,11 +127,108 @@
+ | `tree:<tabID>` | `{id,name?,root,paths={...},complete=true,coverage,purchased,capacity}` only after whole-tree eligibility; `paths` retains node/entry/child/cost evidence plus exact per-path purchased/capacity |
+ | `environment` | `{version, locale?}`; each field's `build` is version + build from GetBuildInfo |
+ 
+-Current production `costRule` is unknown; only injected exact-rule fixtures can
+-produce numeric aggregates. No persisted fresh flag, attention wallet total, rank
++Current production `costRule` remains unknown. The distinct K2 native policy below
++can produce guarded observed aggregates without claiming verified-unit-spend.
++No persisted fresh flag, attention wallet total, rank
+ vector default or cross-tab shared-spent sum exists. Raw evidence may advance while
+ an older coherent numeric tree remains last observed; tooltips use that tree's own
+ path evidence/time and do not mix it with the new raw scan.
++
++### K2 backward-compatible native evidence (no schema migration)
++
++Legacy schema1 raw/trees remain valid without new fields or inferred eligibility.
++No-policy `Knowledge.Evaluate` keeps its legacy exact-rule fixture behavior. Unknown
++or non-string policies never fall through to that mode. New production evidence uses
++**`native-rank-reconciled-v1`** only for identity2913/773/profession13/expansion11;
++Core checks that scope on active/archive load and cloned candidate generation before
++atomic write. Invalid existing data remains untouched with writes disabled.
++
++Native `knowledgeRaw` adds:
++
++- `policy`, numeric `identity={skillLineID,parentID,profession,expansionID}`,
++  `sourceCounter?`, `nativeComplete` and existing config/staging/stability/tab flags.
++  Missing invalid scalar metadata is omitted, not coerced to0/false; incomplete flags
++  remain explicit booleans. `nativeComplete` describes capture, not future cost proof.
++- Each tab adds `currenciesComplete`, `currencyStatus?`, `currencyCount?` (copied rows),
++  all bounded64 typed currency rows in source order, and existing graph/coverage data.
++  Currency rows require unique traitCurrencyID, quantity/spent and optional maxQuantity.
++- Each path adds `metadataComplete`, `spendEntryID`, `spendCurrencyID`, and `spend` entry
++  alongside `unlockEntryID`/`unlock`. Both entries carry type/maxRanks and explicitly
++  observed `entryCost` plus `entryCostComplete`; explicit{} is empty, missing is not.
++  Node costs are a separate bounded16-row array of unique `{ID,amount}` pairs.
++- Nodes retain ID/type/flags/isAvailable/currentRank/activeRank/ranksPurchased/
++  ranksIncreased/maxRanks/totalMaxRanks; optional activeEntry/nextEntry `{entryID,rank}`
++  (nil at max for next), entryIDs/entryIDsWithCommittedRanks (32 each) and
++  entryIDToRanksIncreased (32 entries). `isAvailable` is not a lock classification.
++
++IDs1..2147483647; ranks/amounts/quantities0..2147483647; all finite integers. Native
++lists are dense, plain, unique and inspected at most limit+1 keys; malformed prefixes
++are sanitized with false flags. Graph bounds remain8tabs/64paths/tree/16children/path.
++Cycles, duplicates, unreachable/shared paths or any omitted metadata prevent new
++numeric values. Global copier depth20/50,000-value bounds are unchanged; oversized
++payloads reject atomically rather than raise those limits.
++
++Complete native `tree:<tabID>` adds `accountingPolicy`, its own complete same-scan
++`currencies`, `currenciesComplete=true`, and required typed
++`accountingEvidence={currencyID,spent,quantity,totalPurchased,sourcePin}`. Pin is
++`297d7aaaa736f346b3e036f38ee088eaf7f8c07f`; `totalPurchased==spent` is profession-wide,
++not the local tree sum. Paths also retain rank-derived purchased/capacity and `locked`.
++Core validates these shapes, rank-derived values, graph sums and provenance coherence;
++it is NOT independent API proof or a K1 dependency.
++
++The pure engine independently requires tested tiered node type1/flags0, zero increases,
++active/current/purchased coherence, exact unlock(type9,max0or1)/spend(type7) pair and
++node cap==unlock+spend cap. The increased map covers both entries with0; committed IDs
++are a unique subset containing active when purchased>0 (spend-only at max is valid).
++Active/next ranks are entry data, not additional purchases; next rank is not assumed
++to equal purchased points+1 or constrained to the spend entry's purchased-point cap.
++Below max, next rank must be a positive finite integer<=2147483647 and reference the
++state-appropriate known entry; active rank coherence/caps remain unchanged. At max,
++next must still be nil. Both entry-cost lists must be complete and empty.
++
++Purchased points are `RP>0 and RP-unlockMax or0`; capacity is `nodeMax-unlockMax`.
++RP0/unlock1 is locked, with active unlock0, next unlock and exactly one current unit
++cost in a **different**, uniquely observed tab currency. Opened paths and unlock0/RP0
++paths target spend currency instead; below max next is spend, at max next is nil.
++All paths must identify one common spend currency dynamically; every tab must supply
++one identical committed quantity/spent row. Grand purchased points reconcile to that
++spent **ONCE**. All trees succeed together or none do. Unspent remains independent.
++Current costs are state guards, not verified future/all-rank costs; no observed totals,
++IDs, capacities or path counts are production defaults.
++
++On any native failure, all discovered and prior indexed trees get failed attempts,
++retaining whole prior values/times nonfresh. Incomplete tab reads preserve the prior
++index; any failed native evaluation with an existing coherent index now preserves
++that entire index/time with a failed attempt, even if the new tab list claims complete.
++Retained stale numeric hovers/bars prefer their own stored tree names. No node/tree
++cross-scan merge or newer raw evidence borrowing is permitted.
++K1 Capture/command/report remains read-only and provisional with no snapshot changes.
++
++### K2 correction data-safety gate — delivered, re-review pending
++
++After existing data pass Core.Open and the cloned candidate generation passes typed/
++scope validation, Core.Apply creates a private temporary mirror of the current DB.
++It preserves every primitive key/value and shared table reference using memoization,
++with protected failure and unchanged depth20/50000-value/string/key bounds. Ordinary
++Core.Copy is not used to create the mirror because it duplicates shared references.
++
++Only `mirror.characters[guid]` is replaced by the cloned candidate, then unchanged
++Core.Copy checks that assembled graph before the single real `db.characters[guid]=c`
++commit. Root/nested aliases to the characters map therefore see the candidate in the
++preflight exactly as they do after the real commit. Aliases to the old character object
++remain old; they are not redirected to the candidate. The mirror is discarded, never
++installed into the real DB. Valid preexisting aliases are not rejected by policy.
++
++Mirror/preflight failure returns a bounded reason before any real mutation, retaining
++original root/map/character/reference identities, keys, generations and times. No
++limits raised, reset/eviction, unknown-key omission or DB/container replacement. Only
++Core.Apply's preflight changes; archive/delete/other alias behavior is not modified.
++
++Fixtures derive individually valid old/input and assembled50001 reject/50000 fit
++boundaries, including root/nested/multiple map aliases and old-character aliases.
++They assert retained failure graph identities, successful same-map aliases, immediate
++reopen and old-character alias retention. All96 definitions remain NOT RUN here;
++independent re-review and user fixture/client validation are separate pending gates.
+ 
+ ## Session freshness
+ 

@@ -1,0 +1,437 @@
+--- before/CraftArmy/Data.lua
++++ after/CraftArmy/Data.lua
+@@ -10,10 +10,16 @@
+ }
+ -- ExpansionLevelConstantsDocumentation.lua Midnight=11; 2913 is T01 client-evidenced;
+ -- 2909 is evidenced by the user's child-profession query 2026-11-10.
+--- Other expansion mappings deliberately await a pinned authoritative map.
++-- Remaining six crafting identities: user's batch child-profession query 2026-11-10.
+ Data.expansions = {
+     [2913]={parentID=773, profession=13, expansionID=11, provenance="T01 user 70783"},
+     [2909]={parentID=333, profession=9, expansionID=11, provenance="E01 user child-profession query 2026-11-10"},
++    [2906]={parentID=171, profession=3, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
++    [2907]={parentID=164, profession=1, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
++    [2910]={parentID=202, profession=8, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
++    [2914]={parentID=755, profession=12, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
++    [2915]={parentID=165, profession=2, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
++    [2918]={parentID=197, profession=7, expansionID=11, provenance="E03 user batch child-profession query 2026-11-10"},
+ }
+ -- Stable internal identifiers, not localized display-name lookup. Supplied entries
+ -- stay dormant until the corresponding profession identity is verified; gathering
+@@ -31,7 +37,10 @@
+     Skinning={id=3265, provenance="User-supplied list 2026-11-10; not native-verified"},
+     Tailoring={id=3266, provenance="User-supplied list 2026-11-10; not native-verified"},
+ }
+-Data.moxie = { [2913]=Data.moxieCatalog.Inscription, [2909]=Data.moxieCatalog.Enchanting }
++Data.moxie = { [2913]=Data.moxieCatalog.Inscription, [2909]=Data.moxieCatalog.Enchanting,
++    [2906]=Data.moxieCatalog.Alchemy, [2907]=Data.moxieCatalog.Blacksmithing,
++    [2910]=Data.moxieCatalog.Engineering, [2914]=Data.moxieCatalog.Jewelcrafting,
++    [2915]=Data.moxieCatalog.Leatherworking, [2918]=Data.moxieCatalog.Tailoring }
+ Data.enchants = { [8005]={category="Multicraft", provenance="T01 user ID + typed line; 70783"} }
+ -- Pinned ProfessionsCrafting.xml named Prof0/1ToolSlot and Gear0/1Slot.
+ -- Applied only to slots returned by GetProfessionSlots for this profession.
+--- before/CraftArmy/SelfTests.lua
++++ after/CraftArmy/SelfTests.lua
+@@ -6030,14 +6030,15 @@
+     id=assert(D.Identity(s.info)); eq(id.profession,9); eq(id.skillLineID,2909); eq(id.name,"Inscription")
+     s.info.professionName="附魔"; eq(assert(D.Identity(s.info)).name,"附魔")
+ end)
+-case("E01 Inscription identity unchanged and other expansion identities still unmapped",function()
++case("E01 Inscription identity unchanged and unknown expansion identities still unmapped",function()
+     local map=D.expansions[2913]
+     eq(map.parentID,773); eq(map.profession,13); eq(map.expansionID,11); eq(map.provenance,"T01 user 70783")
+     local _,s=fixtureAPI(); local id=assert(D.Identity(s.info))
+     eq(id.skillLineID,2913); eq(id.parentID,773); eq(id.profession,13); eq(id.expansionID,11); eq(id.name,"Inscription")
+     eq(D.moxie[2913].id,3261); eq(D.moxie[2909].id,3258)
+-    local count=0; for key in pairs(D.expansions) do assert(key==2913 or key==2909); count=count+1 end
+-    eq(count,2)
++    local mapped={[2913]=true,[2909]=true,[2906]=true,[2907]=true,[2910]=true,[2914]=true,[2915]=true,[2918]=true}
++    local count=0; for key in pairs(D.expansions) do assert(mapped[key]); count=count+1 end
++    eq(count,8)
+     for family in pairs(D.families) do
+         -- 60000+family is an explicitly synthetic UNMAPPED skill line, not a proposed ID.
+         local value,why=D.Identity({professionID=60000+family,parentProfessionID=333,
+@@ -6315,16 +6316,20 @@
+     end
+     eq(count,11); for name,id in pairs(expected) do eq(D.moxieCatalog[name].id,id) end
+     count=0
++    local active={[2913]="Inscription",[2909]="Enchanting",[2906]="Alchemy",[2907]="Blacksmithing",
++        [2910]="Engineering",[2914]="Jewelcrafting",[2915]="Leatherworking",[2918]="Tailoring"}
+     for id,entry in pairs(D.moxie) do
+-        assert(id==2913 or id==2909); count=count+1
+-        eq(entry,id==2913 and D.moxieCatalog.Inscription or D.moxieCatalog.Enchanting)
+-    end
+-    eq(count,2)
++        assert(active[id]); count=count+1
++        eq(entry,D.moxieCatalog[active[id]])
++    end
++    eq(count,8)
++    local identities={[2913]={773,13,"T01 user 70783"},[2909]={333,9,"E01 user child-profession query 2026-11-10"},
++        [2906]={171,3},[2907]={164,1},[2910]={202,8},[2914]={755,12},[2915]={165,2},[2918]={197,7}}
+     count=0; for id,map in pairs(D.expansions) do
+-        assert(id==2913 or id==2909); count=count+1; eq(map.expansionID,11)
+-        eq(map.parentID,id==2913 and 773 or 333); eq(map.profession,id==2913 and 13 or 9)
+-        eq(map.provenance,id==2913 and "T01 user 70783" or "E01 user child-profession query 2026-11-10")
+-    end; eq(count,2)
++        assert(identities[id]); count=count+1; eq(map.expansionID,11)
++        eq(map.parentID,identities[id][1]); eq(map.profession,identities[id][2])
++        eq(map.provenance,identities[id][3] or "E03 user batch child-profession query 2026-11-10")
++    end; eq(count,8)
+     local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
+         [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription"}
+     count=0; for id,name in pairs(D.families) do eq(name,families[id]); count=count+1 end; eq(count,8)
+@@ -6421,6 +6426,294 @@
+ end
+ -- E02 END
+ 
++-- E03 BEGIN: six user-evidenced identity tuples and supplied Moxie IDs only.
++-- ALL other data here (GUIDs, labels, skill/gear, balances, concentration/config/tab/
++-- path IDs and failure scenarios) is synthetic, NOT native field/API evidence.
++do
++local D,V=NS.Data,NS.ViewModel
++local specs={
++    {"Alchemy",2906,171,3,3256}, {"Blacksmithing",2907,164,1,3257},
++    {"Engineering",2910,202,8,3259}, {"Jewelcrafting",2914,755,12,3262},
++    {"Leatherworking",2915,165,2,3263}, {"Tailoring",2918,197,7,3266},
++}
++local verifyRegistry=unchangedGraph(D)
++local function configure(env,s,spec,n)
++    s.guid="Player-E03-synthetic-"..spec[4]; s.label="合成 métier "..n
++    s.info={professionID=spec[2],parentProfessionID=spec[3],profession=spec[4],
++        isPrimaryProfession=true,professionName=s.label,expansionName="Synthetic E03",
++        sourceCounter=1,skillLevel=20+n,maxSkillLevel=100,skillModifier=n}
++    s.concentrationID=65000+n; s.balance=41*n+11; s.concentration=210+n; s.unspent=3+n
++    s.queries={}; s.config=68000+n; s.tab=69000+n; s.path=70000+n
++    env.UnitGUID=function(unit) eq(unit,"player"); return s.guid end
++    env.UnitName=function(unit) eq(unit,"player"); return "Synthetic E03 "..n end
++    env.GetProfessions=function() return 1,nil end -- One primary per synthetic GUID.
++    env.GetProfessionInfo=function(index) eq(index,1); return s.label,0,100,100,0,0,spec[3] end
++    local t,p=env.C_TradeSkillUI,env.C_ProfSpecs
++    t.GetBaseProfessionInfo=function() return {professionID=s.info.parentProfessionID} end
++    t.GetProfessionSlots=function(id) eq(id,spec[4]); return s.slots end
++    t.GetConcentrationCurrencyID=function(id) eq(id,spec[2]); return s.concentrationID end
++    env.C_CurrencyInfo.GetCurrencyInfo=function(id)
++        assert(id==s.concentrationID or id==spec[5],"E03 only this profession's currencies")
++        s.queries[id]=(s.queries[id] or 0)+1
++        if s.failure then return s.failure() end
++        if id==spec[5] then return {quantity=s.balance} end
++        return {quantity=s.concentration,maxQuantity=1000}
++    end
++    p.GetCurrencyInfoForSkillLine=function(id) eq(id,spec[2]); return {numAvailable=s.unspent} end
++    p.GetConfigIDForSkillLine=function(id) eq(id,spec[2]); return s.config end
++    env.C_Item.GetItemID=function(loc) return 91000+n*100+loc.slot end
++    env.C_Item.GetItemLink=function(loc) return "item:"..(91000+n*100+loc.slot)..":0:0:0" end
++end
++local function fixture(spec,n,db)
++    local env,s=fixtureAPI(); configure(env,s,spec,n)
++    -- Dynamic synthetic IDs, deliberately not the observed native configs/tabs.
++    local p=env.C_ProfSpecs
++    p.GetSpecTabIDsForSkillLine=function(id) eq(id,spec[2]); return {s.tab} end
++    p.GetTabInfo=function(id) eq(id,s.tab); return {name="Synthetic E03 tree "..n} end
++    p.GetRootPathForTab=function(id) eq(id,s.tab); return s.path end
++    return env,s,NS.Collectors.New(env,db or C.Open(nil))
++end
++local function active(c,s,spec) return c.db.characters[s.guid].professions[spec[2]].active end
++local function row(c,s,spec,at)
++    local rows=V.Build(c.db,c.fresh,{professionFamily=spec[4]},at or s.at)
++    eq(#rows,1); eq(rows[1].guid,s.guid); eq(rows[1].id,spec[2]); return rows[1]
++end
++local function unknownKnowledge(c,s,spec,trees)
++    local g=active(c,s,spec); local f=g.fields.knowledgeRaw
++    eq(f.attempt.status,"unsupported"); eq(f.attempt.value,nil); eq(f.last,nil)
++    assert(f.attempt.reason:find("unverified for this profession",1,true))
++    eq(#g.fields.knowledgeIndex.last.value,trees)
++    for _,tree in ipairs(g.fields.knowledgeIndex.last.value) do
++        local field=g.fields["tree:"..tree.id]; eq(field.attempt.status,"unknown"); eq(field.last,nil)
++    end
++    local r=row(c,s,spec); eq(#r.trees,trees)
++    for _,tree in ipairs(r.trees) do eq(tree.purchased,nil); eq(tree.capacity,nil); eq(tree.aggregateText,"?/?") end
++    local verify=unchangedGraph({c.db,c.fresh,s.queries})
++    local details=NS.Details.Model(c,{guid=s.guid,id=spec[2],generation=g.generation,archived=false})
++    eq(details.supported,false); assert(details.status:find("read-only",1,true)); eq(#details.branches,0)
++    verify()
++end
++local function noFreshMoxie(r)
++    for _,w in ipairs(r.warnings) do if w.category=="Moxie" then eq(w.fresh,false) end end
++end
++
++case("E03 exact six tuples and localized labels never select identities or currency mappings",function()
++    for n,spec in ipairs(specs) do
++        local map=D.expansions[spec[2]]
++        eq(map.parentID,spec[3]); eq(map.profession,spec[4]); eq(map.expansionID,11)
++        eq(map.provenance,"E03 user batch child-profession query 2026-11-10")
++        eq(D.moxie[spec[2]],D.moxieCatalog[spec[1]]); eq(D.moxie[spec[2]].id,spec[5])
++        eq(D.moxie[spec[2]].provenance,"User-supplied list 2026-11-10; not native-verified")
++        local _,s=fixture(spec,n); local id=assert(D.Identity(s.info))
++        eq(id.skillLineID,spec[2]); eq(id.parentID,spec[3]); eq(id.profession,spec[4]); eq(id.expansionID,11)
++        eq(id.name,s.label); eq(id.expansionName,"Synthetic E03")
++        s.info.professionName="Inscription"; id=assert(D.Identity(s.info)); eq(id.skillLineID,spec[2]); eq(id.name,"Inscription")
++    end
++    verifyRegistry()
++end)
++case("E03 all six conflicting parent family own roster unknown and gathering identities fail closed",function(checkpoint)
++    for n,spec in ipairs(specs) do
++        for _,change in ipairs({
++            function(_,s) s.info.parentProfessionID=99999 end,
++            function(_,s) s.info.profession=13 end,
++            function(env) env.C_TradeSkillUI.GetBaseProfessionInfo=function() return {professionID=773} end end,
++            function(env) env.GetProfessions=function() return nil,nil end end,
++            function(_,s) s.info.professionID=60000+spec[4] end,
++            function(_,s) s.info.profession=4 end,
++        }) do
++            pause(checkpoint,"E03 rejected identity variant "..spec[1])
++            local env,s,c=fixture(spec,n); change(env,s); eq(D.Identity(s.info)==nil,
++                s.info.parentProfessionID==99999 or s.info.profession~=spec[4] or s.info.professionID~=spec[2])
++            local verify=unchangedGraph(c.db); eq(c:Scan(),false); eq(next(c.fresh),nil); verify()
++        end
++    end
++    for _,family in ipairs({4,5,6}) do
++        eq(D.Identity({professionID=60000+family,parentProfessionID=171,profession=family}),nil)
++        eq(D.families[family],nil)
++    end
++    eq(D.expansions[60009],nil); eq(D.moxie[60009],nil); verifyRegistry()
++end)
++for index,value in ipairs(specs) do
++    local n,spec=index,value -- Stable closures for each separately reported family.
++    case("E03 injected "..spec[1].." scan saves own generic fields Moxie and unsupported Knowledge Details",function(checkpoint)
++        local _,s,c=fixture(spec,n); eq(c:Scan(),true)
++        local g=active(c,s,spec)
++        eq(g.identity.skillLineID,spec[2]); eq(g.identity.parentID,spec[3]); eq(g.identity.profession,spec[4])
++        eq(g.scannedAt,100); eq(g.fields.skill.last.value.skillLevel,20+n)
++        eq(g.fields.skill.last.value.maxSkillLevel,100); eq(g.fields.skill.last.value.skillModifier,n)
++        eq(g.fields.concentration.last.value.id,65000+n); eq(g.fields.concentration.last.value.quantity,210+n)
++        eq(g.fields.concentration.last.value.maxQuantity,1000); eq(g.fields.unspent.last.value,3+n)
++        for role,slot in pairs({tool=20,accessory1=21,accessory2=22}) do
++            local f=g.fields[role]; eq(f.attempt.status,"observed"); eq(f.last.observedAt,100)
++            eq(f.last.value.role,role); eq(f.last.value.slot,slot); eq(f.last.value.exists,true)
++            eq(f.last.value.itemID,91000+n*100+slot); eq(f.last.value.rarity,3); eq(f.last.value.rank,5)
++        end
++        eq(g.fields.tool.last.value.stats.ITEM_MOD_MULTICRAFT_SHORT,152)
++        local f=g.fields.moxie; eq(f.attempt.status,"observed"); eq(f.last.value.id,spec[5])
++        eq(f.last.value.quantity,41*n+11); eq(f.last.observedAt,100)
++        local r=row(c,s,spec); eq(r.profession,s.label); eq(r.skill.skillLevel,20+n); eq(r.skillState.fresh,true)
++        eq(r.concentration,210+n); eq(r.unspent,3+n); eq(r.moxie,41*n+11)
++        eq(r.cells[I.Moxie],tostring(41*n+11)); eq(s.queries[spec[5]],1); eq(s.queries[65000+n],1)
++        eq(s.queries[3261],nil); eq(s.queries[3258],nil); eq(s.requests,0)
++        eq(g.fields.knowledgeIndex.last.value[1].id,69000+n); unknownKnowledge(c,s,spec,1)
++        pause(checkpoint,"E03 dynamic second balance "..spec[1])
++        s.at=110; s.balance=41*n+13; eq(c:Scan(),true)
++        eq(active(c,s,spec).fields.moxie.last.value.quantity,41*n+13)
++        eq(active(c,s,spec).fields.moxie.last.observedAt,110); eq(s.queries[spec[5]],2)
++        verifyRegistry()
++    end)
++end
++case("E03 fully eligible Inscription graph relabeled to every new identity fails policy and Core raw scope",function(checkpoint)
++    for n,spec in ipairs(specs) do
++        pause(checkpoint,"E03 eligible Inscription control "..spec[1])
++        local env,s,_,c=k2Fixture(); local raw=k2Raw(c)
++        local valid=K.Evaluate(raw); eq(valid.complete,true); eq(valid.sharedSpent,264); eq(#valid.trees,4)
++        eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true)
++        local verifyRaw=unchangedGraph(raw); local relabeled=C.Copy(raw)
++        relabeled.identity={skillLineID=spec[2],parentID=spec[3],profession=spec[4],expansionID=11}
++        eq(relabeled.nativeComplete,true); eq(relabeled.tabsComplete,true); eq(relabeled.stable,true)
++        eq(relabeled.stagedStart,false); eq(relabeled.stagedEnd,false)
++        k2Fail(relabeled,"E03 no numeric policy leak "..spec[1]); eq(#K.Evaluate(relabeled).trees,4)
++        eq(C.ValidPayload("knowledgeRaw",relabeled,"observed"),false); verifyRaw()
++        configure(env,s,spec,n)
++        local id=assert(c:Context()).identity; local who={guid=s.guid,name="Synthetic",realm="Test"}
++        for _,attempt in ipairs({{relabeled,"Invalid production field payload: knowledgeRaw"},
++            {raw,"Invalid candidate generation/scope"}}) do
++            pause(checkpoint,"E03 direct Core rejecting scope "..spec[1])
++            local obs={knowledgeRaw=C.Observation("observed",attempt[1],100,"E03 synthetic raw")}
++            local verify=unchangedGraph({c.db,who,id,obs})
++            local applied,why=C.Apply(c.db,who,id,obs,100,"E03 synthetic")
++            eq(applied,nil); eq(why,attempt[2]); verify()
++        end
++        pause(checkpoint,"E03 scan relabeled eligible graph "..spec[1])
++        eq(c:Scan(),true); unknownKnowledge(c,s,spec,4)
++        for _,archived in ipairs({false,true}) do
++            pause(checkpoint,"E03 saved Core scope rejecting "..spec[1])
++            local saved=C.Copy(c.db); local p=saved.characters[s.guid].professions[spec[2]]; local g=p.active
++            g.fields.knowledgeRaw=C.Merge(nil,C.Observation("observed",raw,100,"E03 synthetic raw"),"E03 synthetic",g.generation)
++            if archived then g.archivedAt=110; g.archiveReason="E03 synthetic"; p.active=nil; p.archives[1]=g end
++            local verify=unchangedGraph(saved); local opened,why=C.Open(saved)
++            eq(opened,nil); eq(why,archived and "Invalid archive; writes disabled." or "Invalid active generation; writes disabled.")
++            verify()
++        end
++        verifyRegistry()
++    end
++end)
++case("E03 distinct characters isolate six families and leave saved Inscription Enchanting untouched",function(checkpoint)
++    local db=C.Open(nil); local controls={
++        {"Inscription",2913,773,13,3261},{"Enchanting",2909,333,9,3258},
++    }
++    for n,spec in ipairs(controls) do
++        pause(checkpoint,"E03 seed existing identity "..spec[1])
++        local _,_,c=fixture(spec,n+10,db); eq(c:Scan(),true)
++    end
++    local oldInscription=db.characters["Player-E03-synthetic-13"]
++    local oldEnchanting=db.characters["Player-E03-synthetic-9"]
++    local verifyControls=unchangedGraph({oldInscription,oldEnchanting}); local last
++    for n,spec in ipairs(specs) do
++        pause(checkpoint,"E03 isolated character scan "..spec[1])
++        local prior={}; for guid,value in pairs(db.characters) do prior[guid]=value end
++        local verifyPrior=unchangedGraph(prior)
++        local _,s,c=fixture(spec,n,db); eq(c:Scan(),true); verifyControls(); verifyPrior()
++        -- The shared characters map gains one key, but every prior character graph
++        -- stays untouched. Check its entries independently from the growing map.
++        for guid,value in pairs(prior) do eq(db.characters[guid],value) end
++        eq(db.characters["Player-E03-synthetic-13"],oldInscription); eq(db.characters["Player-E03-synthetic-9"],oldEnchanting)
++        local r=row(c,s,spec); eq(r.moxie,41*n+11)
++        local count=0; for id in pairs(db.characters[s.guid].professions) do eq(id,spec[2]); count=count+1 end; eq(count,1)
++        last=c
++    end
++    local verify=unchangedGraph(db); eq(#V.Build(db,last.fresh,{},100),8)
++    for n,spec in ipairs(specs) do
++        local rows=V.Build(db,last.fresh,{professionFamily=spec[4]},100); eq(#rows,1)
++        eq(rows[1].guid,"Player-E03-synthetic-"..spec[4]); eq(rows[1].id,spec[2]); eq(rows[1].moxie,41*n+11)
++        eq(rows[1].skillState.fresh,n==#specs)
++    end
++    mockWidgets(last.env); local ui=NS.Dashboard.New(last.env,last); ui:Toggle(); eq(#ui.rows,8)
++    ui:Refresh(); ui:Render(); verify(); verifyControls(); verifyRegistry()
++end)
++case("E03 all six transient generic currency and gear failures preserve coherent values and timestamps",function(checkpoint)
++    for n,spec in ipairs(specs) do
++        pause(checkpoint,"E03 failure seed "..spec[1])
++        local env,s,c=fixture(spec,n); s.balance=601+n; eq(c:Scan(),true)
++        local before=C.Copy(active(c,s,spec))
++        pause(checkpoint,"E03 failed reads "..spec[1])
++        s.at=120; s.info.skillModifier=nil; s.failure=function() error("E03 synthetic currency failure") end
++        env.C_ProfSpecs.GetCurrencyInfoForSkillLine=function() return nil end
++        env.C_Item.GetItemStats=function() error("E03 synthetic gear failure") end
++        eq(c:Scan(),true); local g=active(c,s,spec); eq(g.scannedAt,120)
++        for key,status in pairs({skill="unknown",concentration="error",moxie="error",unspent="unknown",
++            tool="error",accessory1="error",accessory2="error"}) do
++            local f=g.fields[key]; local verify=unchangedGraph(f.last)
++            -- Compare content without requiring retained snapshots to share references.
++            local function same(a,b)
++                eq(type(a),type(b)); if type(a)~="table" then eq(a,b); return end
++                for k,v in pairs(a) do same(v,b[k]) end; for k in pairs(b) do assert(a[k]~=nil) end
++            end
++            same(f.last,before.fields[key].last); verify()
++            eq(f.last.observedAt,100); eq(f.attempt.attemptedAt,120); eq(f.attempt.status,status)
++        end
++        local r=row(c,s,spec); eq(r.skill.skillLevel,20+n); eq(r.skillState.fresh,false); eq(r.skillState.stale,true)
++        eq(r.concentration,210+n); eq(r.unspent,3+n); eq(r.moxie,601+n)
++        eq(r.cells[I.Moxie],"|cff999999~!|r "..(601+n)); noFreshMoxie(r)
++        eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100)
++        local _,ms=V.Field(g,"moxie",c.fresh[s.guid..":"..spec[2]])
++        eq(ms.fresh,false); eq(ms.stale,true); eq(ms.observedAt,100); eq(C.Open(c.db),c.db)
++        verifyRegistry()
++    end
++end)
++case("E03 first currency failures for all six remain unknown not fabricated zero or attention",function(checkpoint)
++    for n,spec in ipairs(specs) do
++        for _,failure in ipairs({function() return nil end,function() error("E03 synthetic failure") end,
++            function() return {quantity=-1} end}) do
++            pause(checkpoint,"E03 first failure "..spec[1])
++            local _,s,c=fixture(spec,n); s.failure=failure; eq(c:Scan(),true)
++            local g=active(c,s,spec); eq(g.fields.moxie.last,nil); eq(g.fields.concentration.last,nil)
++            local r=row(c,s,spec); eq(r.moxie,nil); eq(r.concentration,nil); eq(r.cells[I.Moxie],"?")
++            for _,w in ipairs(r.warnings) do assert(w.category~="Moxie" and w.category~="Concentration") end
++            eq(#V.Build(c.db,c.fresh,{professionFamily=spec[4],attention="Moxie"},100),0)
++            eq(s.queries[spec[5]],1); eq(s.queries[3261],nil); eq(s.queries[3258],nil)
++        end
++    end
++    verifyRegistry()
++end)
++case("E03 closed and reopened six character saved dashboard renders without collection or fabricated freshness",function(checkpoint)
++    local db=C.Open(nil); local last,env,s
++    for n,spec in ipairs(specs) do
++        pause(checkpoint,"E03 cache seed "..spec[1])
++        env,s,last=fixture(spec,n,db); s.balance=601+n; eq(last:Scan(),true)
++        pause(checkpoint,"E03 closed context "..spec[1])
++        s.shown=false; s.at=130; last:Invalidate("E03 synthetic closure")
++        local verify=unchangedGraph(db); eq(last:Scan(),false); verify()
++        local r=row(last,s,spec); eq(r.moxie,601+n); eq(r.skillState.fresh,false); eq(r.lastUpdated,"30s")
++        noFreshMoxie(r); eq(s.queries[spec[5]],1)
++    end
++    pause(checkpoint,"E03 reopen complete saved six-character DB")
++    local saved=C.Copy(db); local reopened=assert(C.Open(saved)); s.at=150
++    local function forbidden() error("E03 cached dashboard must not collect") end
++    for _,api in ipairs({env.C_TradeSkillUI,env.C_ProfSpecs,env.C_Traits,env.C_Item,env.C_CurrencyInfo}) do
++        for key,value in pairs(api) do if type(value)=="function" then api[key]=forbidden end end
++    end
++    local fresh=NS.Collectors.New(env,reopened)
++    fresh.Scan=forbidden; fresh.Context=forbidden; fresh.Knowledge=forbidden; fresh.Gear=forbidden
++    local verify=unchangedGraph({saved,fresh.fresh,s.queries})
++    mockWidgets(env); local ui=NS.Dashboard.New(env,fresh); ui:Toggle(); eq(#ui.rows,6)
++    local byID={}; for _,r in ipairs(ui.rows) do byID[r.id]=r end
++    for n,spec in ipairs(specs) do
++        local r=assert(byID[spec[2]]); eq(r.guid,"Player-E03-synthetic-"..spec[4]); eq(r.profession,"合成 métier "..n)
++        eq(r.skill.skillLevel,20+n); eq(r.concentration,210+n); eq(r.unspent,3+n); eq(r.moxie,601+n)
++        eq(r.gear.tool.value.itemID,91000+n*100+20); eq(r.gear.tool.state.fresh,false)
++        eq(r.skillState.fresh,false); eq(r.skillState.observedAt,100); eq(r.lastUpdated,"50s")
++        assert(r.snapshot:find("snapshot",1,true)); noFreshMoxie(r)
++        local g=saved.characters[r.guid].professions[r.id].active
++        local _,ms=V.Field(g,"moxie",fresh.fresh[r.guid..":"..r.id]); eq(ms.fresh,false); eq(ms.observedAt,100)
++        eq(g.fields.knowledgeRaw.last,nil); eq(r.trees[1].aggregateText,"?/?")
++    end
++    ui:Refresh(); ui:Render(); eq(next(fresh.fresh),nil); verify(); verifyRegistry()
++end)
++end
++-- E03 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+--- before/docs/dashboard/README.md
++++ after/docs/dashboard/README.md
+@@ -1,6 +1,57 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++
++## E03 — all eight crafting identities enabled; six native comparisons pending
++
++**Local implementation delivered; primary actual-baseline comparison and independent
++read-only review are still pending. Do not update the installed addon yet.** This
++section supersedes historical two-active-mapping/dormant-crafting claims below, not
++the accepted E01/E02 observations. Those Enchanting checks need not be repeated.
++
++Only production **`Data.lua`** changes: six user-evidenced Midnight identities
++(child/parent/family, all expansion11), each dated2026-11-10, and active references to
++their existing supplied Moxie catalogue entries:
++
++| Profession | Child / parent / family | Moxie |
++| --- | --- | --- |
++| Alchemy | 2906 /171 /3 | 3256 |
++| Blacksmithing | 2907 /164 /1 | 3257 |
++| Engineering | 2910 /202 /8 | 3259 |
++| Jewelcrafting | 2914 /755 /12 | 3262 |
++| Leatherworking | 2915 /165 /2 | 3263 |
++| Tailoring | 2918 /197 /7 | 3266 |
++
++Inscription2913→3261 and Enchanting2909→3258 are unchanged. Gathering remains outside
++scope; its three catalogue entries stay dormant. Native identity/config/tab queries
++prove **identity only**, not generic fields, Moxie balances, Knowledge accounting or
++responsiveness. Config/tab observations are not hardcoded. Supplied Moxie provenance
++for the new six remains **not native-verified** until initial dashboard comparisons.
++
++All eight identities can use existing guarded skill, gear/stat/enchant, dynamic
++concentration, Moxie and Unspent KP collection. **Numeric Knowledge and Details remain
++Inscription-only**: other professions store a nil-valued unsupported Knowledge-raw
++attempt, may show named unknown trees and have read-only unsupported Details. No
++collector/Core/Knowledge/Details/schema/UI changes. Unknown is not observed0 or a
++confirmed missing enchant; failures retain coherent prior values/time where available.
++
++Local fixtures: **251/251** (238 retained, exactly two obsolete mapping-count/scope
++cases adapted,13 new E03), unchanged **744 K6 /565 K7**, diagnostic23/23 and both
++Python structural checks. Original220 and all other236 prior cases/helpers/runner
++are byte-frozen. Fixtures are synthetic correctness evidence, not native API/UI/latency
++acceptance; exact checks, hashes and inverse/freeze limits are in [evidence](evidence.md).
++
++### E03 next gate — primary comparison and independent review first
++
++After those gates, the eventual reviewed update for a user already on E02 is only
++**`CraftArmy/Data.lua` + `CraftArmy/SelfTests.lua`**, preserving SavedVariables and
++backups; the primary will coordinate instructions. No update is advised by this
++delivery. The initial **batched native comparison** covers the six professions'
++normal fields **and current Moxie balance together**, with normal-use errors/warnings/
++responsiveness reported. No separate currency-ID discovery, automatic repeat of
++accepted Enchanting cache/Moxie checks, Details refresh or full native selftest is
++requested. Six-profession native field/Moxie/normal-use and saved-data behavior remain
++pending. Full native stress stays **INCOMPLETE87/149**; guides and release are separate.
+ 
+ ## E02 — Enchanting Moxie verified in dashboard
+ 

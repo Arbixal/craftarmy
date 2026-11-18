@@ -1,0 +1,123 @@
+# Primary actual K3b to K3c comparison; source evidence, not Lua execution.
+# CraftArmy/SelfTests.lua baselineSHA256=1987100363dd229b130ee352523060950fe3d85745e362d24a063dcbec77e933 targetSHA256=44a0e7905d760b32729ec98a26651c8c6b424d0dc3bfd718aec514e5133295dd
+--- K3b/CraftArmy/SelfTests.lua
++++ K3c/CraftArmy/SelfTests.lua
+@@ -1952,7 +1952,7 @@
+     env.CreateFrame=function() error("PRIVATE-UI-ERROR") end
+     local window,reason=NS.KnowledgeCheck.Show(env,text); eq(window,nil); assert(reason:find("capability failure",1,true)); assert(not reason:find("PRIVATE-UI-ERROR",1,true))
+ end)
+-case("K1 combat command does no capture UI focus timer or deferred automatic work",function()
++case("K1 combat command does no capture UI focus timer or deferred automatic work",function(checkpoint)
+     local env,s,_,c=knowledgeFixture(); mockWidgets(env); local chat={}
+     env.DEFAULT_CHAT_FRAME={AddMessage=function(_,line) chat[#chat+1]=line end}
+     local commands=NS.Commands.New(env); commands.collector=c
+@@ -1960,11 +1960,15 @@
+     eq(commands:Run("knowledgecheck"),nil); before(); eq(#env.fixtureWidgets,count); eq(#s.timers,0); eq(s.requests,0)
+     eq(commands.knowledgeWindow,nil); eq(commands.knowledgeText,nil); eq(c.deferred,nil); eq(c.scheduled,nil)
+     eq(NS.KnowledgeCheck.Show(env,"test"),nil); eq(#env.fixtureWidgets,count)
++    pause(checkpoint,"K3c first combat checks")
+     s.combat=false; eq(#env.fixtureWidgets,count,"leaving combat does not auto-open")
++    pause(checkpoint,"K3c before first command")
+     local r=commands:Run("knowledgecheck"); eq(r.captureComplete,true); assert(commands.knowledgeWindow)
+     local window=commands.knowledgeWindow; local text=commands.knowledgeText; count=#env.fixtureWidgets
++    pause(checkpoint,"K3c first command complete")
+     local second=commands:Run("knowledgecheck"); eq(second.captureComplete,true); eq(commands.knowledgeWindow,window)
+     eq(commands.knowledgeText,text); eq(window.edit:GetText(),text); eq(#env.fixtureWidgets,count,"repeat reuses copy widgets")
++    pause(checkpoint,"K3c repeat command complete")
+     s.combat=true
+     eq(commands:Run("knowledgecheck"),nil); eq(commands.knowledgeWindow,window); eq(commands.knowledgeText,text)
+     eq(window.edit.focused,true,"combat command makes no focus call"); eq(#env.fixtureWidgets,count); eq(#s.timers,0)
+# docs/dashboard/README.md baselineSHA256=3758d4cc17558fac6d8f09ffbd07898d78421c53eb15fee82a8ebec5c8e21c54 targetSHA256=15e3e9299437dab0e30c7b7ee1784490b2928f8a3ba4702eedab2fdf2dd793b6
+--- K3b/docs/dashboard/README.md
++++ K3c/docs/dashboard/README.md
+@@ -1,12 +1,14 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** K3a stopped correctly **INCOMPLETE,62 passed/0 failed of111**
+-at case63 combined setup/capture/format unit140.4ms (wall20823.1ms), exceeding the
+-unchanged100ms limit. Individual phase timings were not measured. K3b bounded jobs
+-below await independent review; **do not rerun unchanged K3a/K3 or the old synchronous
+-suite**. New123 definitions are NOT RUN, not a performance PASS. Historical96/96 accompanied extended
+-lockup/execution-limit warnings; recurrence/interactivity and warning cause remain unverified.
++**Current selftest paused:** K3b stopped **INCOMPLETE,66 passed/0 failed of123**,
++case66 combined unit102.8ms (wall65297.9ms), exceeding the unchanged100ms limit.
++Case63 maximum stress passed;57 cases remain uncompleted, including new cases112–123.
++Individual command timings were not measured. K3c's four case66 checkpoints await
++independent review; **do not rerun unchanged K3b/K3a/K3 or the old synchronous suite**.
++Historical K3a62/111 stopped at case63 combined140.4ms (wall20823.1ms); historical96/96
++accompanied extended lockup/execution-limit warnings. Full safe completion, warning
++recurrence/interactivity and warning cause remain unverified; no performance PASS.
+ K2 adds narrowly scoped Midnight Inscription native-rank/shared-spent-reconciled
+ bars, subject to complete same-scan guards and review/user validation. This is NOT
+ verified future/all-rank cost proof. Registry support for eight crafting families is not runtime
+@@ -39,7 +41,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3b review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3c review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -161,7 +163,7 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K3b bounded knowledge jobs (current; user only AFTER independent review)
++### K3c case66 checkpoints (current; user only AFTER independent review)
+ 
+ The historical user **96 passed / 0 failed** is functional assertion evidence only:
+ the accompanying extended lockup and69x execution-limit warning make safe performance
+@@ -178,14 +180,23 @@
+ wall20823.1ms. No individual constructor/capture/format timings, explicit warning
+ recurrence or interactivity evidence was supplied. K3b slices the full512-path setup,
+ capture and both real formatting workloads; all old111 assertions/stress remain and
+-12 job cases are appended. New123-case execution/native performance is **NOT RUN**.
+-
+-1. **Wait for primary's independent K3b review.** Only after review/primary coordination,
+-   fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
+-   Already on K3a: replace **only `CraftArmy/KnowledgeCheck.lua` and
+-   `CraftArmy/SelfTests.lua`** with the reviewed K3b files.
+-   Keep **`Commands.lua`**, all K2/other addon files, `CraftArmyDB`, diagnostics and all
+-   SavedVariables unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset.
++12 job cases are appended. K3b subsequently stopped **INCOMPLETE66/123,0 failed**,
++case66 unit1/case return102.8ms, wall65297.9ms. Case63 maximum stress and64–65 passed;
++57 cases remain uncompleted, and appended cases112–123 did not execute. No individual
++setup/command/UI timing or explicit warning recurrence/interactivity report was supplied.
++The preceding case65 boundary does not establish timing causality; neither does the
++historical BugGrabber warning. K3c adds exactly four outer checkpoints in case66 between
++complete combat/UI groups and its two real synchronous35-path commands. Each actual
++capture+format+Show remains fully atomic, unchanged and unmeasured individually; this
++does **not guarantee each command<100ms**. All123 definitions/assertions/stress remain;
++K3c Lua execution/native performance is **NOT RUN**.
++
++1. **Wait for primary's independent K3c review.** Only after review/primary coordination,
++    fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
++   Already on K3b: replace **only `CraftArmy/SelfTests.lua`** with the reviewed K3c file.
++   Keep **`KnowledgeCheck.lua`**, **`Commands.lua`**, all K2/other addon files,
++   `CraftArmyDB`, diagnostics and all SavedVariables unchanged.
++   Same version0.2.0-mvp/Interface120105/schema1; no reset.
+ 2. Login/reload, then explicitly run **`/ca selftest` out of combat**. It is asynchronous:
+    STARTED reports the actual
+    total (**123 definitions**, not a promised pass). It executes at most one safe unit
+@@ -212,7 +223,7 @@
+    actual frame scheduling/performance or all-rank costs. `/cad selftest` is separate,
+     unchanged and not requested again by this correction.
+ 
+-#### Read-only job contract (module callers; not a new command)
++#### K3b read-only job contract (module callers; unchanged by K3c, not a new command)
+ 
+ `KnowledgeCheck.NewCaptureJob(env,runtime,options?)` and
+ `NewFormatJob(report,options?)` return jobs with `Step()` / `Cancel(reason?)`,
+@@ -254,8 +265,8 @@
+ K1 user **66/66** and complete native report are baseline evidence only. K2 defines
+ **96 cases** (all66 byte-exact retained +30 K2 definitions, including9 review-correction
+ cases). User96/96 assertions now PASS, but lockup/warning blocks performance acceptance.
+-The historical five-file update/selftest instructions below are superseded by K3b's
+-two-file update/review gate for users already on K3a; **do not repeat the old suite**.
++The historical five-file update/selftest instructions below are superseded by K3c's
++SelfTests-only update/review gate for users already on K3b; **do not repeat the old suite**.
+ Injected fixtures are not API proof.
+ 
+ K2 corrected static re-review passed; this does not clear the new responsiveness gate.

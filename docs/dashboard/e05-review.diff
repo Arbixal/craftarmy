@@ -1,0 +1,348 @@
+--- before/CraftArmy/Core.lua
++++ after/CraftArmy/Core.lua
+@@ -166,7 +166,7 @@
+ local function sameInstance(a,b)
+     return type(a)=="table" and type(b)=="table" and a.exists==true and b.exists==true and
+         Core.Integer(a.slot,1) and a.slot==b.slot and Core.Integer(a.itemID,1) and a.itemID==b.itemID and
+-        type(a.link)=="string" and a.link:match("item:%d+:%d+:")~=nil and a.link==b.link
++        type(a.link)=="string" and a.link:match("item:%d+:%d*:")~=nil and a.link==b.link
+ end
+ -- Apply-only: the full input pack and whole old character were cloned THIS call.
+ -- No yield, external callback or real write occurs while these owned tables merge.
+--- before/CraftArmy/Collectors.lua
++++ after/CraftArmy/Collectors.lua
+@@ -41,8 +41,8 @@
+ 
+ function Collectors.Enchant(link, typedPositive, ready)
+     if ready ~= true or type(link) ~= "string" then return {status="unknown", reason="instance link unready"} end
+-    local item, raw=link:match("item:(%d+):(%d+):")
+-    local id=tonumber(raw)
++    local item, raw=link:match("item:(%d+):(%d*):")
++    local id=raw=="" and 0 or tonumber(raw)
+     if not item or not C.Integer(id) then return {status="unknown", reason="invalid/missing enchant field"} end
+     if id==0 and typedPositive==true then return {status="unknown", reason="link/typed-line conflict"} end
+     if id>0 then
+--- before/CraftArmy/SelfTests.lua
++++ after/CraftArmy/SelfTests.lua
+@@ -464,7 +464,7 @@
+     local v=E("item:90000:8005:0",true,true); eq(v.present,true); eq(v.category,"Multicraft"); eq(v.amount,nil); eq(v.rank,nil)
+     eq(E("item:90000:9999:0",false,true).category,nil)
+     eq(E("item:90000:0:0",true,true).status,"unknown")
+-    eq(E("item:90000::0",false,true).status,"unknown")
++    local empty=E("item:90000::0",false,true); eq(empty.status,"observed"); eq(empty.present,false); eq(empty.id,0)
+     eq(E("item:90000:8005:0",true,false).status,"unknown")
+ end)
+ case("guarded scan only own player; dynamic concentration and zero unspent",function()
+@@ -6912,6 +6912,264 @@
+ end
+ -- E04 END
+ 
++-- E05 BEGIN: explicit-empty enchant encoding; all instance/scan values are synthetic.
++do
++local E,V=NS.Collectors.Enchant,NS.ViewModel
++local verifyRegistry=unchangedGraph(NS.Data)
++local function noAmounts(v) eq(v.amount,nil); eq(v.rank,nil); eq(v.quality,nil) end
++local function absent(v)
++    eq(v.status,"observed"); eq(v.present,false); eq(v.id,0); eq(v.category,nil); eq(v.reason,nil); noAmounts(v)
++end
++local function unknown(v,reason)
++    eq(v.status,"unknown"); eq(v.present,nil); eq(v.id,nil); eq(v.category,nil); eq(v.reason,reason); noAmounts(v)
++    eq(V.Tool({exists=true,metadataReady=true,enchant=v},{text="E05 synthetic"}).enchantText,"?")
++end
++local function fixture(field)
++    local env,s=fixtureAPI()
++    s.guid="Player-E05-synthetic-enchanter"; s.field=field or ""; s.positive=false
++    s.info={professionID=2909,parentProfessionID=333,profession=9,isPrimaryProfession=true,
++        professionName="Enchanting",expansionName="Synthetic E05",sourceCounter=1,
++        skillLevel=43,maxSkillLevel=100,skillModifier=7}
++    env.UnitGUID=function(unit) eq(unit,"player"); return s.guid end
++    env.UnitName=function(unit) eq(unit,"player"); return "Synthetic E05 enchanter" end
++    env.GetProfessionInfo=function(index) eq(index,1); return "Enchanting",0,100,100,0,0,333 end
++    local t,p=env.C_TradeSkillUI,env.C_ProfSpecs
++    t.GetBaseProfessionInfo=function() return {professionID=333} end
++    t.GetProfessionSlots=function(family) eq(family,9); return s.slots end
++    t.GetConcentrationCurrencyID=function(skill) eq(skill,2909); return 75001 end
++    t.GetItemCraftedQualityByItemInfo=function() return 3 end
++    t.GetItemCraftedQualityInfo=function() return {quality=3,iconSmall="E05-synthetic-atlas"} end
++    env.C_CurrencyInfo.GetCurrencyInfo=function(currency)
++        assert(currency==75001 or currency==3258,"E05 own Enchanting currencies only")
++        return {quantity=currency==3258 and 87 or 317,maxQuantity=currency==75001 and 1000 or 0}
++    end
++    p.GetConfigIDForSkillLine=function(skill) eq(skill,2909); return 75002 end
++    p.GetSpecTabIDsForSkillLine=function(skill) eq(skill,2909); return {} end
++    p.GetCurrencyInfoForSkillLine=function(skill) eq(skill,2909); return {numAvailable=6} end
++    env.C_Item.GetItemID=function(loc) return 95000+loc.slot end
++    env.C_Item.GetItemLink=function(loc)
++        if s.noLink then return nil end
++        return "item:"..(95000+loc.slot)..":"..(loc.slot==20 and s.field or "0")..":0:0"
++    end
++    env.C_Item.GetItemQuality=function() return 2 end
++    env.C_Item.GetItemStats=function() return {ITEM_MOD_RESOURCEFULNESS_SHORT=53} end
++    env.C_TooltipInfo.GetInventoryItem=function(unit,slot)
++        eq(unit,"player")
++        return {lines=slot==20 and s.positive and {{type=15,leftText="E05 synthetic enchant"}} or {}}
++    end
++    return env,s,NS.Collectors.New(env,C.Open(nil))
++end
++local function active(c,s) return c.db.characters[s.guid].professions[2909].active end
++local function row(c,s)
++    local rows=V.Build(c.db,c.fresh,{professionFamily=9},s.at)
++    eq(#rows,1); eq(rows[1].guid,s.guid); eq(rows[1].id,2909); return rows[1]
++end
++case("E05 explicit empty and zero equivalent in plain legacy and modern full links",function()
++    for _,wrap in ipairs({function(v) return v end,
++        function(v) return "|cffa335ee|H"..v.."|h[Synthetic legacy tool]|h|r" end,
++        function(v) return "|cnIQ3:|H"..v.."|h[Synthetic modern tool]|h|r" end}) do
++        -- Full synthetic suffix exercises zero omission beyond the enchant field too.
++        for _,tail in ipairs({"0",":0:0:0:0:100:9:0:0:0:2:111:222:0:0:0"}) do
++            local empty=E(wrap("item:95020::"..tail),false,true)
++            local zero=E(wrap("item:95020:0:"..tail),false,true)
++            absent(empty); absent(zero)
++            for k,v in pairs(empty) do eq(zero[k],v) end
++            for k,v in pairs(zero) do eq(empty[k],v) end
++        end
++    end
++    verifyRegistry()
++end)
++case("E05 truly missing malformed negative nonnumeric and overflow fields remain unknown",function()
++    for _,link in ipairs({"", "item:95020", "item:95020:", "item:95020:0", "item:95020:8005",
++        "item:::", "item:abc::0", "item:95020:garbage:0", "item:95020: :0",
++        "item:95020:-1:0", "item:95020:+0:0", "item:95020:1.5:0", "item:95020:0x1:0",
++        "item:95020:"..string.rep("9",400)..":0", "|cnIQ3:|Hitem:95020:|h[Missing delimiter]|h|r"}) do
++        unknown(E(link,false,true),"invalid/missing enchant field")
++    end
++    for _,value in ipairs({{},false,95020}) do unknown(E(value,false,true),"instance link unready") end
++    unknown(E(nil,false,true),"instance link unready"); verifyRegistry()
++end)
++case("E05 explicit empty and zero retain typed positive conflict and strict readiness guards",function()
++    for _,field in ipairs({"","0"}) do
++        local link="item:95020:"..field..":0"
++        unknown(E(link,true,true),"link/typed-line conflict")
++        unknown(E(link,false,false),"instance link unready")
++        unknown(E(link,false,nil),"instance link unready")
++        unknown(E(link,false,1),"instance link unready")
++        absent(E(link,false,true)); absent(E(link,nil,true))
++    end
++    verifyRegistry()
++end)
++case("E05 positive exact categories and unmapped IDs preserve presence without amounts ranks",function()
++    for _,spec in ipairs({{7977,"Resourcefulness"},{8005,"Multicraft"},{8035,"Ingenuity"},
++        {8033,"Deftness"},{8003,"Finesse"},{7975,"Perception"},{9999}}) do
++        for _,positive in ipairs({false,true}) do
++            local link="|cnIQ3:|Hitem:95020:"..spec[1].."::::0:0:100:9:0:0:0|h[Synthetic tool]|h|r"
++            local v=E(link,positive,true)
++            eq(v.status,"observed"); eq(v.present,true); eq(v.id,spec[1]); eq(v.category,spec[2]); noAmounts(v)
++            eq(V.Tool({exists=true,metadataReady=true,enchant=v},{text="E05 synthetic"}).enchantText,spec[2] or "?")
++            unknown(E(link,positive,false),"instance link unready")
++        end
++    end
++    verifyRegistry()
++end)
++case("E05 isolated own ready Enchanting empty field normal scan saves absence and blank",function()
++    local _,s,c=fixture(); eq(c:Scan(),true)
++    local g=active(c,s); eq(g.identity.skillLineID,2909); eq(g.identity.parentID,333); eq(g.identity.profession,9)
++    local f=g.fields.tool; eq(f.attempt.status,"observed"); eq(f.last.observedAt,100)
++    eq(f.last.value.link,"item:95020::0:0"); eq(f.last.value.itemID,95020); eq(f.last.value.metadataReady,true)
++    eq(f.last.value.rarity,2); eq(f.last.value.rank,3); absent(f.last.value.enchant)
++    local r=row(c,s); eq(r.profession,"Enchanting"); eq(r.cells[I.Enchant],""); eq(r.enchantMissing,true)
++    eq(r.cells[I.Stat],"Resourcefulness"); eq(r.gear.tool.state.fresh,true)
++    assert(table.concat(r.gear.tool.tooltip,"\n"):find("Enchant: no; ID 0",1,true))
++    eq(r.skill.skillLevel,43); eq(r.moxie,87); eq(r.concentration,317); eq(r.unspent,6)
++    eq(g.fields.knowledgeRaw.last,nil); eq(g.fields.knowledgeRaw.attempt.status,"unsupported")
++    local n=0; for guid in pairs(c.db.characters) do eq(guid,s.guid); n=n+1 end; eq(n,1)
++    n=0; for id in pairs(c.db.characters[s.guid].professions) do eq(id,2909); n=n+1 end; eq(n,1)
++    eq(s.requests,0); eq(C.Open(c.db),c.db); verifyRegistry()
++end)
++case("E05 later observed empty field clears prior known enchant without stale category borrowing",function(checkpoint)
++    local _,s,c=fixture("8035"); s.positive=true; eq(c:Scan(),true)
++    local old=active(c,s); local verify=unchangedGraph(old)
++    eq(row(c,s).cells[I.Enchant],"Ingenuity"); eq(old.fields.tool.last.value.enchant.id,8035)
++    pause(checkpoint,"E05 known to observed empty own scan")
++    s.at=121; s.field=""; s.positive=false; eq(c:Scan(),true)
++    local g=active(c,s); eq(g.generation,old.generation); eq(g.scannedAt,121)
++    local f=g.fields.tool; eq(f.last.observedAt,121); eq(f.attempt.attemptedAt,121); eq(f.attempt.status,"observed")
++    absent(f.last.value.enchant); eq(f.last.value.enchant.category,nil)
++    eq(f.last.value.link,"item:95020::0:0"); eq(row(c,s).cells[I.Enchant],""); eq(row(c,s).enchantMissing,true)
++    eq(row(c,s).gear.tool.state.fresh,true); verify(); verifyRegistry()
++end)
++case("E05 unavailable reads preserve identifiable known history and closed empty snapshot time",function(checkpoint)
++    -- Core's exact-link same-instance guard is deliberately unchanged; use its
++    -- established numeric link for same-instance metadata failure preservation.
++    for _,failure in ipairs({function(env) env.C_Item.GetItemStats=function() error("E05 synthetic read error") end end,
++        function(env) env.C_Item.GetItemQuality=function() return nil end end,
++        function(_,s) s.loading=true end}) do
++        pause(checkpoint,"E05 seed identifiable known history")
++        local env,s,c=fixture("8035"); s.positive=true; eq(c:Scan(),true)
++        local old=active(c,s).fields.tool.last; local verify=unchangedGraph(old)
++        pause(checkpoint,"E05 unavailable same instance metadata")
++        failure(env,s); s.at=132; eq(c:Scan(),true)
++        local f=active(c,s).fields.tool; assert(f.attempt.status~="observed")
++        eq(f.attempt.attemptedAt,132); eq(f.last.observedAt,100); eq(f.last.value.enchant.id,8035)
++        local r=row(c,s); eq(r.cells[I.Enchant],"Ingenuity"); eq(r.enchantMissing,false)
++        eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.stale,true); eq(r.gear.tool.state.observedAt,100)
++        verify()
++    end
++    pause(checkpoint,"E05 seed ready empty before context unavailable")
++    local _,s,c=fixture(); eq(c:Scan(),true); local verify=unchangedGraph(c.db)
++    pause(checkpoint,"E05 unavailable own profession context")
++    s.shown=false; s.at=144; c:Invalidate("E05 synthetic closure"); eq(c:Scan(),false)
++    local r=row(c,s); eq(r.cells[I.Enchant],""); eq(r.gear.tool.state.observedAt,100)
++    eq(r.gear.tool.state.fresh,false); eq(r.lastUpdated,"44s"); absent(active(c,s).fields.tool.last.value.enchant)
++    verify(); verifyRegistry()
++end)
++case("E05 initial failed conflicting malformed and metadata unready scans never fabricate absence",function(checkpoint)
++    for _,change in ipairs({function(_,s) s.noLink=true end,function(_,s) s.loading=true end,
++        function(_,s) s.positive=true end,function(_,s) s.field="garbage" end,
++        function(env) env.C_Item.GetItemQuality=function() return nil end end}) do
++        pause(checkpoint,"E05 initial unknown not absent scan")
++        local env,s,c=fixture(); change(env,s); eq(c:Scan(),true)
++        local r=row(c,s); eq(r.cells[I.Enchant],"?"); assert(r.enchantMissing~=true)
++        local tool=active(c,s).fields.tool.last.value
++        if tool.enchant and tool.enchant.status=="observed" then
++            -- Valid empty parsing does not relax the whole-tool display gate.
++            absent(tool.enchant); eq(tool.metadataReady,false); eq(r.gear.tool.enchant,nil)
++        else assert(not tool.enchant or tool.enchant.status=="unknown") end
++    end
++    local value={exists=true,metadataReady=false,enchant=E("item:95020::0",false,true)}
++    absent(value.enchant); eq(V.Tool(value,{text="E05 synthetic"}).enchantText,"?"); verifyRegistry()
++end)
++case("E05 old saved unknown stays unknown without cached API migration then normal scan becomes blank",function(checkpoint)
++    local env,s,c=fixture(); eq(c:Scan(),true)
++    pause(checkpoint,"E05 reconstruct private pre-fix unknown snapshot")
++    local saved=assert(C.Copy(c.db)); local old=saved.characters[s.guid].professions[2909].active.fields.tool.last
++    old.value.enchant={status="unknown",reason="invalid/missing enchant field"}; eq(C.Open(saved),saved)
++    local restore,calls={},0
++    local function trap() calls=calls+1; error("E05 cached API forbidden") end
++    for _,api in ipairs({env.C_TradeSkillUI,env.C_ProfSpecs,env.C_Traits,env.C_Item,env.C_CurrencyInfo,env.C_TooltipInfo}) do
++        for key,value in pairs(api) do
++            if type(value)=="function" then restore[#restore+1]={api,key,value}; api[key]=trap end
++        end
++    end
++    local cached=NS.Collectors.New(env,saved); s.at=156
++    local verify=unchangedGraph({saved,cached.fresh})
++    mockWidgets(env); local ui=NS.Dashboard.New(env,cached); ui:Toggle(); eq(#ui.rows,1)
++    local r=ui.rows[1]; eq(r.cells[I.Enchant],"?"); assert(r.enchantMissing~=true)
++    eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100); eq(r.lastUpdated,"56s")
++    ui:Refresh(); ui:Render(); eq(calls,0); eq(old.value.enchant.status,"unknown"); verify()
++    for _,entry in ipairs(restore) do entry[1][entry[2]]=entry[3] end
++    pause(checkpoint,"E05 normal ready own scan replaces cached unknown")
++    s.at=160; eq(cached:Scan(),true); absent(active(cached,s).fields.tool.last.value.enchant)
++    eq(active(cached,s).fields.tool.last.observedAt,160); eq(row(cached,s).cells[I.Enchant],"")
++    eq(row(cached,s).gear.tool.state.fresh,true); eq(old.value.enchant.status,"unknown"); eq(old.observedAt,100)
++    eq(calls,0); verifyRegistry()
++end)
++-- E05 amendment: regression first; same explicit-empty instance must preserve the
++-- WHOLE prior unit, never a partial new/old metadata mixture, on unavailable reads.
++for _,spec in ipairs({
++    {name="stats error",status="error",change=function(env) env.C_Item.GetItemStats=function() error("E05 empty-link stats failure") end end},
++    {name="quality nil",status="unknown",change=function(env) env.C_Item.GetItemQuality=function() return nil end end},
++    {name="loading",status="unknown",change=function(_,s) s.loading=true end},
++}) do
++    local failure=spec
++    case("E05 same explicit empty link preserves coherent absence on "..failure.name,function(checkpoint)
++        local env,s,c=fixture(); eq(c:Scan(),true)
++        local before=active(c,s); local old=before.fields.tool.last; local verify=unchangedGraph(before)
++        eq(old.value.link,"item:95020::0:0"); eq(old.value.metadataReady,true); absent(old.value.enchant)
++        eq(row(c,s).cells[I.Enchant],""); eq(row(c,s).gear.tool.state.fresh,true)
++        pause(checkpoint,"E05 same empty-link retry "..failure.name)
++        s.at=173; failure.change(env,s); eq(c:Scan(),true)
++        local g=active(c,s); local f=g.fields.tool
++        eq(f.attempt.status,failure.status); eq(f.attempt.attemptedAt,173); eq(g.scannedAt,173)
++        eq(f.last.observedAt,100,"same valid-empty instance retains successful time on "..failure.name)
++        local function same(a,b)
++            eq(type(a),type(b)); if type(a)~="table" then eq(a,b); return end
++            for key,value in pairs(a) do same(value,b[key]) end
++            for key in pairs(b) do assert(a[key]~=nil,"no new last-snapshot field") end
++        end
++        same(f.last,old); eq(g.generation,before.generation)
++        eq(f.last.value.slot,20); eq(f.last.value.itemID,95020); eq(f.last.value.link,old.value.link)
++        eq(f.last.value.metadataReady,true); eq(f.last.value.rarity,2); eq(f.last.value.rank,3)
++        eq(f.last.value.stats.ITEM_MOD_RESOURCEFULNESS_SHORT,53); absent(f.last.value.enchant)
++        local r=row(c,s); eq(r.cells[I.Enchant],""); eq(r.enchantMissing,true)
++        eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.stale,true); eq(r.gear.tool.state.observedAt,100)
++        eq(r.lastUpdated,"0s"); eq(C.Open(c.db),c.db); verify(); verifyRegistry()
++    end)
++end
++case("E05 empty-link history cannot leak into changed item link slot missing or malformed instance",function(checkpoint)
++    for _,change in ipairs({
++        function(v) v.itemID=96020; v.link="item:96020::0:0" end,
++        function(v) v.link="item:95020:0:0:0" end,
++        function(v) v.slot=21 end,
++        function(v) v.link="item:95020:garbage:0" end,
++        function(v) v.link="item:95020:" end,
++        function(v) v.link=nil end,
++        function(v) v.exists=false; v.itemID=nil; v.link=nil end,
++    }) do
++        pause(checkpoint,"E05 empty-link identity negative seed")
++        local env,s,c=fixture(); eq(c:Scan(),true)
++        local ctx=assert(c:Context()); local old=active(c,s).fields.tool.last; local verify=unchangedGraph(old)
++        -- Failed, partial unit from an independently unavailable read. Its identity
++        -- must not inherit any old rank/stat/enchant even if some IDs match.
++        local partial={slot=20,role="tool",exists=true,metadataReady=false,itemID=95020,link=old.value.link}
++        change(partial)
++        pause(checkpoint,"E05 empty-link identity negative apply")
++        local g=assert(C.Apply(c.db,ctx.character,ctx.identity,
++            {tool=C.Observation("unknown",partial,181,"E05 synthetic failed unit")},181,"E05 fixture"))
++        local f=g.fields.tool; eq(f.attempt.status,"unknown"); eq(f.attempt.attemptedAt,181)
++        eq(f.last.observedAt,181); eq(f.last.value.metadataReady,false)
++        eq(f.last.value.enchant,nil); eq(f.last.value.stats,nil); eq(f.last.value.rank,nil); eq(f.last.value.rarity,nil)
++        for key,value in pairs(partial) do eq(f.last.value[key],value) end
++        s.at=181; local r=row(c,s); eq(r.gear.tool.state.fresh,false)
++        eq(r.cells[I.Enchant],partial.exists and "?" or ""); assert(r.enchantMissing~=true)
++        eq(C.Open(c.db),c.db); verify(); verifyRegistry()
++    end
++end)
++end
++-- E05 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+--- before/docs/dashboard/README.md
++++ after/docs/dashboard/README.md
+@@ -1,6 +1,45 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++
++## E05 — explicit-empty parsing/preservation delivered; review/native check pending
++
++**Local implementation only; primary actual-baseline comparison and independent review
++must finish before update advice.** This current gate supersedes the E04 investigation
++and historical empty-field-is-unknown descriptions below, retaining their evidence.
++The affected diagnostic says `Enchant: unknown; invalid/missing enchant field`.
++Its fresh Enchanting rod screenshot supports parser investigation, not proof of the
++exact raw item-link payload; its Resourcefulness tool stat is not enchant evidence.
++
++Documented item links omit zero-valued fields. A ready `item:95020::0` has an explicitly
++empty, delimited enchant field and now means observed ID0/no enchant, just like
++`item:95020:0:0`, unless a typed-positive enchant line conflicts. Missing delimiters,
++nil/malformed/overflow/unready/conflicting data remain unknown (`?`), never a zero
++fallback. Positive known IDs retain full categories; unmapped positives remain `?`.
++Whole-tool metadata readiness/freshness gates, schema and UI are unchanged. Core's
++same-instance enchant syntax guard now accepts the same explicit-empty form, so an
++identical slot/item/full link retains the coherent known snapshot and its original
++successful time on transient stats/quality/loading failure. Exact identity/link
++equality and existence requirements remain unchanged; changed/missing/malformed
++instances cannot borrow old metadata. No link normalization or subfield borrowing.
++Initial273-pass parser-only delivery missed this integration path and was not accepted.
++
++Production changes are only `Collectors.lua`'s two parser/conversion lines and
++`Core.lua`'s one same-instance syntax pattern. `SelfTests.lua` adapts one obsolete
++valid-empty expectation and adds13 E05 cases. Three new preservation cases first
++failed against unchanged Core, then passed unchanged after the one-pattern fix.
++Local **277/277 +744 K6 /565 K7** passes are synthetic correctness evidence, not a
++native blank-display/API result. Full native selftest remains **INCOMPLETE87/149**.
++No saved migration or API reads on cached/offline/hover views: old saved unknowns
++remain `?` until a normal ready own-profession scan supplies a new observation.
++
++After primary comparison/review acceptance, the eventual E04-based update is only
++**`CraftArmy/Core.lua` + `CraftArmy/Collectors.lua` + `CraftArmy/SelfTests.lua`**, preserving SavedVariables
++and backups. Then the focused user gate is one normal ready own-profession scan of
++an affected known-unenchanted tool and comparison of blank Enchant versus native
++absence, reporting errors/warnings/unresponsiveness. That gate is **pending**, not
++requested before review. No repeat accepted field/Moxie/cache/reload tests, extra
++enchant-ID discovery, full native suite or Details refresh. No release approval.
+ 
+ ## E04 — Engineering Resourcefulness confirmed; absence-state report open
+ 

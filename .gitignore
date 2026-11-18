@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Credentials and local environment settings
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+credentials*.json
+secrets*.json
+
+# WoW runtime data; addon Lua source is intentionally tracked
+WTF/
+SavedVariables/
+
+# Local captures, working artifacts and generated packages
+/captures/
+/exports/
+/artifacts/
+/backups/
+/tmp/
+/dist/
+*.log
+*.bak
+*.backup
+
+# Preserve the project agent definition, not local OpenCode runtime state
+/.opencode/*
+!/.opencode/agents/
+/.opencode/agents/*
+!/.opencode/agents/*.md
+
+# Editor/OS noise
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

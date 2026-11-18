@@ -1,0 +1,1541 @@
+# Actual K2 baseline to K3 responsive-selftest changes; primary-generated evidence, not Lua execution.
+# CraftArmy/SelfTests.lua baselineSHA256=2a64e3a25d425dc90bbe607565b4e8ad07e30d18a261f8ad17bad5ee220713f5 targetSHA256=fda95e1fe727d224371f57e0f2f0cf9777b7b78b6fcffefa04c00b2cfe3c428b
+--- K2/CraftArmy/SelfTests.lua
++++ K3/CraftArmy/SelfTests.lua
+@@ -4,6 +4,87 @@
+ local function case(name, fn) Tests.cases[#Tests.cases+1]={name=name, fn=fn} end
+ local function eq(a,b,context) assert(a == b, (context and context..": " or "")..tostring(a).." ~= "..tostring(b)) end
+ local C, K, I = NS.Core, NS.Knowledge, NS.ViewModel.index
++local function clean(value, limit)
++    if type(value)~="string" then return "unspecified" end
++    return (value:gsub("[%c|]"," "):sub(1,limit or 128))
++end
++local function pause(checkpoint,label) if checkpoint then checkpoint(label) end end
++
++-- Only native Lua resumes/yields: never wrap a case in pcall (Lua 5.1 cannot
++-- yield through that C boundary). Protected fixture helpers finish before pausing.
++function Tests.NewRunner(cases)
++    local r={passed=0,failed=0,lines={},total=0,index=0,steps=0,status="running",completed=false}
++    local list,thread,apply,evaluate
++    local token={}
++    local function stop(reason)
++        r.status="incomplete"; r.completed=false; r.reason=clean(reason,256)
++        list=nil; thread=nil; apply=nil; evaluate=nil
++        return r
++    end
++    function r:Cancel(reason)
++        if self.status=="running" then return stop(reason or "cancelled") end
++        return self
++    end
++    local source=cases
++    if source==nil then source=Tests.cases end
++    list={}
++    if type(source)~="table" or getmetatable(source)~=nil then stop("malformed cases")
++    else
++        local count=0
++        for k,t in pairs(source) do
++            count=count+1
++            if count>512 or not C.Integer(k,1) or k>512 or type(t)~="table" or getmetatable(t)~=nil
++                or type(t.name)~="string" or type(t.fn)~="function" then
++                stop("malformed cases or 512 case cap"); break
++            end
++            list[k]={name=clean(t.name),fn=t.fn}
++        end
++        if r.status=="running" then
++            for i=1,count do if not list[i] then stop("sparse cases"); break end end
++            r.total=count
++        end
++    end
++    function r:Step()
++        self.lastLine=nil
++        if self.status~="running" then return self end
++        if self.steps>=10000 then return stop("10000 step cap") end
++        if not thread then
++            if self.index>=self.total then
++                self.status="complete"; self.completed=true; list=nil; return self
++            end
++            self.index=self.index+1; self.name=list[self.index].name
++            self.label="case entry"; self.unit=0
++            apply,evaluate=C.Apply,K.Evaluate
++            local fn=list[self.index].fn
++            thread=coroutine.create(function()
++                fn(function(label)
++                    if C.Apply~=apply or K.Evaluate~=evaluate then
++                        error("unsafe checkpoint: fixture overrides still active",0)
++                    end
++                    coroutine.yield(token,clean(label or "checkpoint"))
++                end)
++            end)
++        end
++        -- Unexpected shared-function drift between frames is not ours to restore.
++        if C.Apply~=apply or K.Evaluate~=evaluate then return stop("function identity drift; reload required") end
++        self.steps=self.steps+1; self.unit=self.unit+1
++        local ok,value,label=coroutine.resume(thread)
++        if C.Apply~=apply or K.Evaluate~=evaluate then return stop("function identity drift; reload required") end
++        if coroutine.status(thread)~="dead" then
++            if not ok or value~=token then return stop("unexpected coroutine yield") end
++            self.label=label
++            return self
++        end
++        self.label="case return"
++        if ok then self.passed=self.passed+1 else self.failed=self.failed+1 end
++        self.lastLine=(ok and "PASS " or "FAIL ")..self.name..(ok and "" or ": "..clean(type(value)=="string" and value or "case error",256))
++        self.lines[#self.lines+1]=self.lastLine
++        thread=nil; apply=nil; evaluate=nil
++        if self.index==self.total then self.status="complete"; self.completed=true; list=nil end
++        return self
++    end
++    return r
++end
+ local function nonfiniteSamples()
+     -- Actual arithmetic NaN; never gate this sample on self-equality in WoW.
+     return {{name="NaN (0/0)",value=0/0},{name="+infinity",value=math.huge},{name="-infinity",value=-math.huge}}
+@@ -283,9 +364,10 @@
+     eq(g.fields.tool.last.value.stats.ITEM_MOD_MULTICRAFT_SHORT,152)
+     eq(g.fields.tool.last.observedAt,100)
+ end)
+-case("R4 nonfinite collector metadata preserves coherent values time and nonfresh presentation",function()
++case("R4 nonfinite collector metadata preserves coherent values time and nonfresh presentation",function(checkpoint)
+     for _,sample in ipairs(nonfiniteSamples()) do
+         for _,mode in ipairs({"stats","rarity","rank","modifier","quantity"}) do
++            pause(checkpoint,"R4 collector variant")
+             local env,s=fixtureAPI(); local collector=NS.Collectors.New(env,C.Open(nil)); eq(collector:Scan(),true,"initial fixture scan")
+             local key=(mode=="modifier" and "skill") or (mode=="quantity" and "moxie") or "tool"
+             if mode=="stats" then env.C_Item.GetItemStats=function() return {ITEM_MOD_MULTICRAFT_SHORT=sample.value} end
+@@ -317,13 +399,14 @@
+         end
+     end
+ end)
+-case("R1 same-instance stats rarity rank nil error unsupported retain coherent unit and time",function()
++case("R1 same-instance stats rarity rank nil error unsupported retain coherent unit and time",function(checkpoint)
+     local readers={
+         {table="C_Item",key="GetItemStats"}, {table="C_Item",key="GetItemQuality"},
+         {table="C_TradeSkillUI",key="GetItemCraftedQualityByItemInfo"},
+     }
+     for _,reader in ipairs(readers) do
+         for _,failure in ipairs({"unknown","error","unsupported"}) do
++            pause(checkpoint,"R1 same-instance variant")
+             local env,s=fixtureAPI(); local collector=NS.Collectors.New(env,C.Open(nil))
+             eq(collector:Scan(),true)
+             local api=env[reader.table]
+@@ -345,8 +428,9 @@
+         end
+     end
+ end)
+-case("R1 failed gear replacement removal and unidentifiable items never inherit metadata",function()
++case("R1 failed gear replacement removal and unidentifiable items never inherit metadata",function(checkpoint)
+     for _,mode in ipairs({"replacement","removal","noLink","noLocation","noItemID"}) do
++        pause(checkpoint,"R1 replacement variant")
+         local env,s=fixtureAPI(); local collector=NS.Collectors.New(env,C.Open(nil)); collector:Scan()
+         s.at=120
+         if mode=="replacement" then s.itemID=99001; env.C_Item.GetItemStats=function() return nil end
+@@ -442,8 +526,9 @@
+     eq(collector.db.characters[character.guid].professions[2913].active.fields.tool.last.value.rank,5)
+     assertMissingFresh(collector,false)
+ end)
+-case("R2 async failed event retry timeout apply and mixed statuses cannot promote failed fields",function()
++case("R2 async failed event retry timeout apply and mixed statuses cannot promote failed fields",function(checkpoint)
+     for _,mode in ipairs({"event","retry","timeout","apply","mixed"}) do
++        pause(checkpoint,"R2 failed async variant")
+         local env,s=fixtureAPI(); s.itemID=99000
+         local collector=NS.Collectors.New(env,C.Open(nil)); eq(collector:Scan(),true)
+         s.loading=true; s.at=101; eq(collector:Scan(),true)
+@@ -479,8 +564,9 @@
+         end
+     end
+ end)
+-case("R2 late mismatched invalidated generation and duplicate completions cannot restore freshness",function()
++case("R2 late mismatched invalidated generation and duplicate completions cannot restore freshness",function(checkpoint)
+     for _,mode in ipairs({"late","mismatch","duringRead","afterApply","generation","duplicate"}) do
++        pause(checkpoint,"R2 late async variant")
+         local env,s=fixtureAPI(); s.itemID=99000
+         local collector=NS.Collectors.New(env,C.Open(nil)); collector:Scan()
+         s.loading=true; s.at=101; collector:Scan()
+@@ -824,7 +910,7 @@
+     parent[path[#path]]=number
+     return value
+ end
+-case("R4 typed active archive and incoming nonfinite payloads reject without mutation or attention",function()
++case("R4 typed active archive and incoming nonfinite payloads reject without mutation or attention",function(checkpoint)
+     local fields={
+         {key="skill",path={"skillModifier"}}, {key="moxie",path={"quantity"}},
+         {key="concentration",path={"maxQuantity"}}, {key="unspent",path={}},
+@@ -837,6 +923,7 @@
+         for _,descriptor in ipairs(fields) do
+             local context=descriptor.key.." / "..sample.name
+             for _,archived in ipairs({false,true}) do
++                pause(checkpoint,"R4 typed active/archive variant")
+                 local db,g=dbWith(payloadFixtures())
+                 if archived then
+                     eq(C.Archive(db,character.guid,2913,20,"fixture"),true,"archive setup")
+@@ -918,9 +1005,10 @@
+         {key="environment",value={version=true}},
+     }
+ end
+-case("R1 typed active and archived payload validation rejects every consumed malformed shape untouched",function()
++case("R1 typed active and archived payload validation rejects every consumed malformed shape untouched",function(checkpoint)
+     for _,bad in ipairs(invalidPayloads()) do
+         for _,archived in ipairs({false,true}) do
++            pause(checkpoint,"R1 typed active/archive variant")
+             local db,g=dbWith(payloadFixtures())
+             if archived then
+                 C.Archive(db,character.guid,2913,20,"fixture")
+@@ -935,8 +1023,9 @@
+         end
+     end
+ end)
+-case("R1 malformed incoming production scans rejected atomically including dynamic keys",function()
++case("R1 malformed incoming production scans rejected atomically including dynamic keys",function(checkpoint)
+     for _,bad in ipairs(invalidPayloads()) do
++        pause(checkpoint,"R1 incoming payload variant")
+         local db=dbWith(payloadFixtures()); local before=C.Copy(db)
+         local value=C.Copy(payloadFixtures()[bad.key])
+         if bad.change then bad.change(value) else value=bad.value end
+@@ -1031,9 +1120,10 @@
+     local a,b=env.fixtureRect(lower),env.fixtureRect(upper)
+     assert(a.y>=b.y+b.h-0.000001,"overlapping vertical bands: "..context)
+ end
+-case("R5 geometry 0 1 2 12 13 many rows has exact compact bounds and canonical hover headers",function()
++case("R5 geometry 0 1 2 12 13 many rows has exact compact bounds and canonical hover headers",function(checkpoint)
+     local expected={110,100,150,64,44,44,44,180,130,96,56,232,74,100}
+     for _,count in ipairs({0,1,2,12,13,37}) do
++        pause(checkpoint,"R5 geometry variant")
+         local ui,env=dashboardRows(count)
+         local visible=math.min(12,math.max(1,count))
+         eq(ui.frame.width,1454,"fixed outer width"); eq(ui.frame.height,194+22*visible,"dynamic window height")
+@@ -1227,13 +1317,14 @@
+     assert(table.concat(row.tooltip,"\n"):find("Archived 130: fixture archived later than scan",1,true))
+     eq(#row.warnings,0)
+ end)
+-case("R6 quality glyphs bare rank fallbacks rarity RGB and reused cell transparency",function()
++case("R6 quality glyphs bare rank fallbacks rarity RGB and reused cell transparency",function(checkpoint)
+     local env=fixtureAPI(); mockWidgets(env)
+     local values=payloadFixtures()
+     local db=dbWith(values); local collector=NS.Collectors.New(env,db); local ui=NS.Dashboard.New(env,collector); ui:Toggle()
+     local first=ui.widgets[1]
+     local rgb={[2]={30/255,1,0},[3]={0,112/255,221/255},[4]={163/255,53/255,238/255}}
+     for rarity=2,4 do for rank=1,5 do
++        pause(checkpoint,"R6 rarity/rank variant")
+         local v=C.Copy(values.tool); v.icon=1234; v.rarity=rarity; v.rank=rank
+         v.quality={quality=rank,iconSmall="FixtureQuality"..rank}
+         C.Apply(db,character,identity,{tool=C.Observation("observed",v,100,"fixture")},100,"fixture"); ui:Refresh()
+@@ -1314,8 +1405,9 @@
+         else eq(first.cells[I.Tool].label.labelText,"") end
+     end
+ end)
+-case("R6 Enchant known absent no-tool unloaded unknown unmapped and blank attention",function()
++case("R6 Enchant known absent no-tool unloaded unknown unmapped and blank attention",function(checkpoint)
+     for _,mode in ipairs({"known","absent","empty","notApplicable","unloaded","unknown","unmapped"}) do
++        pause(checkpoint,"R6 enchant variant")
+         local env=fixtureAPI(); mockWidgets(env); local values=payloadFixtures()
+         if mode=="known" then values.tool.enchant={status="observed",present=true,id=8005,category="Multicraft"}; values.tool.link="item:90020:8005:0"
+         elseif mode=="empty" then values.tool={slot=20,role="tool",exists=false,metadataReady=false}
+@@ -1501,10 +1593,10 @@
+ local function incomplete(report)
+     eq(report.captureComplete,false); eq(report.candidate,nil); eq(report.reconciliation.status,"unknown")
+ end
+-case("K1 complete 35 paths full currencies provisional264 once privacy and immutable runtime",function()
++case("K1 complete 35 paths full currencies provisional264 once privacy and immutable runtime",function(checkpoint)
+     local env,s,f,runtime=knowledgeFixture()
+-    trappedCapture(env,runtime,function()
+-        for _=1,2 do
++    for _=1,2 do
++        trappedCapture(env,runtime,function()
+             local r=NS.KnowledgeCheck.Capture(env,runtime)
+             eq(r.captureComplete,true); eq(r.stable,true); eq(r.captured,35); eq(r.discovered,35)
+             eq(r.candidate.points,264); eq(r.shared.spent,264); eq(r.shared.quantity,0)
+@@ -1526,12 +1618,15 @@
+             for _,secret in ipairs({"PRIVATE-GUID","PRIVATE-NAME","PRIVATE-REALM","PRIVATE-SAVED-DATA","PRIVATE-RUNTIME-REASON","PRIVATE-FORBIDDEN-PAYLOAD","|","\001"}) do assert(not text:find(secret,1,true),secret) end
+             assert(text:find("NOT verified all-rank costs",1,true)); assert(text:find("compared ONCE",1,true))
+             eq(r.build.interface.value,120105); eq(r.build.build,"70783"); eq(s.requests,0); eq(#s.timers,0)
+-        end
++        end)
++        pause(checkpoint,"K1 protected capture and format")
++    end
++    trappedCapture(env,runtime,function()
+         f.entries[f.unlock[f.tabs[1].root]].entryCost=nil
+         incomplete(NS.KnowledgeCheck.Capture(env,runtime))
+     end)
+ end)
+-case("K1 empty missing alternate multiple zero and variable current costs stay distinct",function()
++case("K1 empty missing alternate multiple zero and variable current costs stay distinct",function(checkpoint)
+     local changes={
+         {run=function(f,id) f.entries[f.unlock[id]].entryCost=nil end,complete=false,word="unavailable"},
+         {run=function(f,id) f.entries[f.spend[id]].entryCost={{ID=3902,amount=2}} end,complete=true,word="entry-specific"},
+@@ -1544,14 +1639,16 @@
+         {run=function(f,id) f.costs[id]={{ID=3900,amount=1}} end,complete=true,word="alternate"},
+     }
+     for _,change in ipairs(changes) do
++        pause(checkpoint,"K1 cost variant")
+         local env,_,f,c=knowledgeFixture(); local id=f.tabs[1].root; change.run(f,id)
+         local r=NS.KnowledgeCheck.Capture(env,c); eq(r.captureComplete,change.complete)
+         assert(firstPath(r).currentUnitCost:find(change.word,1,true)); eq(r.allRankCosts,"unverified")
+         if not change.complete then incomplete(r); eq(firstPath(r).unlock.entryCost.status,"nil") end
+     end
+ end)
+-case("K1 currency reconciliation mismatch conflicts duplicates absent and path currency disagreement",function()
++case("K1 currency reconciliation mismatch conflicts duplicates absent and path currency disagreement",function(checkpoint)
+     for mode=1,7 do
++        pause(checkpoint,"K1 currency variant")
+         local env,_,f,c=knowledgeFixture(); local rows=f.currencies[f.tabs[4].id]
+         if mode==1 then for _,tab in ipairs(f.tabs) do local rr=f.currencies[tab.id]; rr[#rr].spent=265 end
+         elseif mode==2 then rows[#rows].spent=265
+@@ -1567,7 +1664,7 @@
+         if mode==4 then incomplete(r) end
+     end
+ end)
+-case("K1 candidate entry and rank guards never borrow next rank or assume unlock one",function()
++case("K1 candidate entry and rank guards never borrow next rank or assume unlock one",function(checkpoint)
+     local changes={
+         function(f,id) f.nodes[id].ranksIncreased=1 end,
+         function(f,id) f.nodes[id].currentRank=2 end,
+@@ -1583,13 +1680,15 @@
+         function(f,id) f.nodes[id].nextEntry.entryID=999 end,
+     }
+     for _,change in ipairs(changes) do
++        pause(checkpoint,"K1 rank variant")
+         local env,_,f,c=knowledgeFixture(); change(f,f.tabs[1].root)
+         local r=NS.KnowledgeCheck.Capture(env,c); eq(firstPath(r).candidate,nil); eq(r.candidate,nil); eq(r.reconciliation.status,"unknown")
+     end
+ end)
+-case("K1 explicit staging false required at both context and protected read boundaries",function()
++case("K1 explicit staging false required at both context and protected read boundaries",function(checkpoint)
+     for _,bad in ipairs({{v=nil},{v=true},{v="false"},{throws=true}}) do
+         for _,atEnd in ipairs({false,true}) do
++            pause(checkpoint,"K1 staging variant")
+             local env,_,_,c=knowledgeFixture(); local count=0
+             env.C_Traits.ConfigHasStagedChanges=function()
+                 count=count+1
+@@ -1603,8 +1702,9 @@
+         end
+     end
+ end)
+-case("K1 blocked own ready primary Inscription contexts and unavailable runtime tokens",function()
++case("K1 blocked own ready primary Inscription contexts and unavailable runtime tokens",function(checkpoint)
+     for _,key in ipairs({"shown","ready","linked","guild","npc","changing","combat"}) do
++        pause(checkpoint,"K1 context variant")
+         local env,s,_,c=knowledgeFixture()
+         s[key]=(key~="shown" and key~="ready")
+         local verify=unchangedGraph(c); incomplete(NS.KnowledgeCheck.Capture(env,c)); verify()
+@@ -1618,13 +1718,14 @@
+         function(e) e.C_ProfSpecs.GetConfigIDForSkillLine=function() return nil end end,
+         function(e) e.InCombatLockdown=nil end,
+     }
+-    for _,change in ipairs(changes) do local e,s,_,c=knowledgeFixture(); change(e,s); incomplete(NS.KnowledgeCheck.Capture(e,c)) end
++    for _,change in ipairs(changes) do pause(checkpoint,"K1 unavailable context"); local e,s,_,c=knowledgeFixture(); change(e,s); incomplete(NS.KnowledgeCheck.Capture(e,c)) end
+     local env,_,_,c=knowledgeFixture()
+     incomplete(NS.KnowledgeCheck.Capture(env,nil)); c.revision=nil; incomplete(NS.KnowledgeCheck.Capture(env,c))
+     c.revision=0; c.serial=0/0; incomplete(NS.KnowledgeCheck.Capture(env,c))
+ end)
+-case("K1 identity config source counter revision serial and closing races invalidate all aggregates",function()
++case("K1 identity config source counter revision serial and closing races invalidate all aggregates",function(checkpoint)
+     for mode=1,6 do
++        pause(checkpoint,"K1 race variant")
+         local env,s,_,c=knowledgeFixture(); local original=env.C_Traits.GetNodeCost; local once=false
+         env.C_Traits.GetNodeCost=function(...)
+             if not once then
+@@ -1643,7 +1744,7 @@
+         assert(not NS.KnowledgeCheck.Format(r):find("Player-OTHER-PRIVATE",1,true))
+     end
+ end)
+-case("K1 unavailable throwing APIs and unexpected failures return private incomplete evidence",function()
++case("K1 unavailable throwing APIs and unexpected failures return private incomplete evidence",function(checkpoint)
+     local paths={
+         {"C_ProfSpecs","GetSpecTabIDsForSkillLine"},{"C_ProfSpecs","GetTabInfo"},{"C_ProfSpecs","GetRootPathForTab"},
+         {"C_ProfSpecs","GetChildrenForPath"},{"C_ProfSpecs","GetUnlockEntryForPath"},{"C_ProfSpecs","GetSpendEntryForPath"},
+@@ -1652,6 +1753,7 @@
+     }
+     for _,pathSpec in ipairs(paths) do
+         for _,mode in ipairs({"missing","nil","error"}) do
++            pause(checkpoint,"K1 protected API variant")
+             local env,_,_,c=knowledgeFixture()
+             env[pathSpec[1]][pathSpec[2]]=function()
+                 if mode=="error" then error("PRIVATE-ERROR-PAYLOAD |Hattack|h") end
+@@ -1669,11 +1771,12 @@
+     local r=NS.KnowledgeCheck.Capture(env,c); incomplete(r)
+     assert(not NS.KnowledgeCheck.Format(r):find("PRIVATE-UNEXPECTED",1,true))
+ end)
+-case("K1 actual nonfinite malformed IDs ranks cost currency and entry maps fail closed",function()
++case("K1 actual nonfinite malformed IDs ranks cost currency and entry maps fail closed",function(checkpoint)
+     local values={{v=-1},{v=0.5},{v="1"},{v=false},{v=2147483648}}
+     for _,sample in ipairs(nonfiniteSamples()) do values[#values+1]={v=sample.value} end
+     for _,sample in ipairs(values) do
+         for mode=1,8 do
++            pause(checkpoint,"K1 malformed scalar variant")
+             local env,_,f,c=knowledgeFixture(); local id=f.tabs[1].root; local v=sample.v
+             if mode==1 then f.nodes[id].ranksPurchased=v
+             elseif mode==2 then f.unlock[id]=v
+@@ -1687,7 +1790,7 @@
+         end
+     end
+ end)
+-case("K1 dense typed arrays bounded key inspection sparse keyed metatable invalid duplicate",function()
++case("K1 dense typed arrays bounded key inspection sparse keyed metatable invalid duplicate",function(checkpoint)
+     local changes={
+         function(e,f,id) f.children[id]={[2]=id+1} end,
+         function(e,f,id) f.children[id]={named=id+1} end,
+@@ -1702,10 +1805,11 @@
+         function(e,f,id) f.entries[f.unlock[id]].entryCost=false end,
+         function(e,f,id) e.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() return {1101,1101} end end,
+     }
+-    for _,change in ipairs(changes) do local e,_,f,c=knowledgeFixture(); change(e,f,f.tabs[1].root); incomplete(NS.KnowledgeCheck.Capture(e,c)) end
+-end)
+-case("K1 every fixed collection limit is explicit and inspection stops at limit plus one",function()
++    for _,change in ipairs(changes) do pause(checkpoint,"K1 list variant"); local e,_,f,c=knowledgeFixture(); change(e,f,f.tabs[1].root); incomplete(NS.KnowledgeCheck.Capture(e,c)) end
++end)
++case("K1 every fixed collection limit is explicit and inspection stops at limit plus one",function(checkpoint)
+     for mode=1,7 do
++        pause(checkpoint,"K1 bound variant")
+         local env,_,f,c=knowledgeFixture(); local id=f.tabs[1].root; local data={}; local limit
+         if mode==1 then limit=8; for i=1,100 do data[i]=1100+i end; env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() return data end
+         elseif mode==2 then limit=16; for i=1,100 do data[i]=id+i end; f.children[id]=data
+@@ -1721,13 +1825,16 @@
+         if bounded.flags then eq(bounded.flags.truncated,true) else eq(bounded.status,"truncated") end
+     end
+     local env,_,f,c=knowledgeFixture({65})
++    pause(checkpoint,"K1 path bound")
+     local r=NS.KnowledgeCheck.Capture(env,c); incomplete(r); eq(r.tabs[1].captured,64); eq(r.tabs[1].discovered,65); eq(r.tabs[1].flags.pathLimit,true)
+     local e,_,ff,cc=knowledgeFixture(); local entry=ff.entries[ff.unlock[ff.tabs[1].root]]; entry.entryCost={}
+     for i=1,17 do entry.entryCost[i]={ID=5000+i,amount=0} end
+     local rr=NS.KnowledgeCheck.Capture(e,cc); incomplete(rr); eq(firstPath(rr).unlock.entryCost.inspected,17)
+-end)
+-case("K1 cycles duplicate children and shared tab ownership visit every discovered ID at most once",function()
++    pause(checkpoint,"K1 entry bound")
++end)
++case("K1 cycles duplicate children and shared tab ownership visit every discovered ID at most once",function(checkpoint)
+     for mode=1,3 do
++        pause(checkpoint,"K1 graph variant")
+         local env,_,f,c=knowledgeFixture(); local root=f.tabs[1].root
+         if mode==1 then f.children[root]={root}
+         elseif mode==2 then f.children[root]={root+1,root+1}
+@@ -1738,10 +1845,12 @@
+         eq(mode==3 and r.tabs[2].flags.sharedOwnership or r.tabs[1].flags.cycleOrDuplicate,true)
+     end
+ end)
+-case("K1 byte and line budgets retain reserved end summary never clipped success and pure format",function()
++case("K1 byte and line budgets retain reserved end summary never clipped success and pure format",function(checkpoint)
+     local env,_,_,c=knowledgeFixture({64,64,64,64,64,64,64,64})
+     local r=NS.KnowledgeCheck.Capture(env,c); incomplete(r); eq(r.outputTruncated,true)
++    pause(checkpoint,"K1 maximum capture")
+     local text,summary=NS.KnowledgeCheck.Format(r)
++    pause(checkpoint,"K1 byte budget format")
+     eq(summary.outputTruncated,true); eq(summary.captureComplete,false); eq(summary.reconciliation.status,"unknown")
+     assert(#text<=262144); local _,lines=text:gsub("\n",""); assert(lines+1<=4096)
+     assert(text:find("version1 END",1,true)); assert(text:find("END SUMMARY version1",1,true)); assert(not text:find("provisional match",1,true))
+@@ -1751,6 +1860,7 @@
+     for i=1,600 do report.tabs[1].paths[i]={id=i} end
+     local verify=unchangedGraph(report)
+     text,summary=NS.KnowledgeCheck.Format(report); verify()
++    pause(checkpoint,"K1 line budget format")
+     eq(summary.outputTruncated,true); eq(summary.captureComplete,false); assert(#text<=262144)
+     local _,n=text:gsub("\n",""); assert(n+1<=4096); assert(n>4000,"line bound actually exercised")
+     assert(not text:find("provisional match",1,true))
+@@ -1971,7 +2081,7 @@
+     local observed=k2Observations(raw,r,10); local db=C.Open(nil)
+     assert(C.Apply(db,character,identity,observed,10,"fixture")); eq(C.Open(db),db)
+ end)
+-case("K2 every node rank type flag cap availability entry list and map guard fails all trees",function()
++case("K2 every node rank type flag cap availability entry list and map guard fails all trees",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c)
+     local changes={
+         function(p) p.metadataComplete=false end,function(p) p.childrenComplete=false end,
+@@ -1994,12 +2104,13 @@
+         function(p) p.node.entryIDsWithCommittedRanks={p.unlockEntryID,p.unlockEntryID} end,
+     }
+     for i,change in ipairs(changes) do
++        pause(checkpoint,"K2 node guard "..i)
+         local raw=C.Copy(base); change(raw.tabs[1].paths[106192]); k2Fail(raw,"node guard "..i)
+     end
+     local raw=C.Copy(base); raw.tabs[1].paths[106192].node.isAvailable=false
+     eq(K.Evaluate(raw).complete,true,"availability boolean is not lock state")
+ end)
+-case("K2 active next committed locked and zero unlock state plus current and entry costs",function()
++case("K2 active next committed locked and zero unlock state plus current and entry costs",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c)
+     local changes={
+         {106192,function(p) p.node.activeEntry=nil end},
+@@ -2027,16 +2138,17 @@
+         {106187,function(p) p.costs[1].ID=999 end},
+     }
+     for i,item in ipairs(changes) do
++        pause(checkpoint,"K2 state guard "..i)
+         local raw=C.Copy(base); item[2](raw.tabs[1].paths[item[1]]); k2Fail(raw,"state/cost "..i)
+     end
+     for _,change in ipairs({
+         function(p) p.node.activeEntry.rank=5 end,
+         function(p) p.node.activeEntry.entryID=p.unlockEntryID end,
+         function(p) p.node.entryIDsWithCommittedRanks={p.unlockEntryID} end,
+-    }) do local raw=C.Copy(base); change(raw.tabs[3].paths[109656]); k2Fail(raw,"partial active") end
++    }) do pause(checkpoint,"K2 partial active variant"); local raw=C.Copy(base); change(raw.tabs[3].paths[109656]); k2Fail(raw,"partial active") end
+     local raw=C.Copy(base); raw.tabs[2].paths[106280].node.nextEntry={entryID=131037,rank=10}; k2Fail(raw,"max next")
+ end)
+-case("K2 complete64 currencies sharedlast beyond8 and all shared mismatches excluded once",function()
++case("K2 complete64 currencies sharedlast beyond8 and all shared mismatches excluded once",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c)
+     for _,tab in ipairs(base.tabs) do
+         local row=table.remove(tab.currencies,1)
+@@ -2055,12 +2167,13 @@
+         function(s) s.tabs[1].paths[106192].spendCurrencyID=3900 end,
+         function(s) s.tabs[1].currencies[64].spent=nil end,
+     }
+-    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"shared guard "..i) end
++    for i,change in ipairs(changes) do pause(checkpoint,"K2 shared guard "..i); local raw=C.Copy(base); change(raw); k2Fail(raw,"shared guard "..i) end
+     base.shared={applicable=true,spent=999}; eq(K.Evaluate(base).sharedSpent,264,"ignore K1/raw supplied match authority")
+ end)
+-case("K2 unsupported policy scope source config and boundary flags cannot fall through legacy",function()
++case("K2 unsupported policy scope source config and boundary flags cannot fall through legacy",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c)
+     for _,value in ipairs({false,true,1,"unknown","verified-unit-spend"}) do
++        pause(checkpoint,"K2 policy variant")
+         local raw=C.Copy(base); raw.policy=value; k2Fail(raw,"policy")
+         eq(C.ValidPayload("knowledgeRaw",raw,"observed"),false)
+     end
+@@ -2073,11 +2186,11 @@
+         function(s) s.stagedStart=nil end,function(s) s.stagedStart=true end,
+         function(s) s.stagedEnd=nil end,function(s) s.stagedEnd=true end,
+     }
+-    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"boundary "..i) end
++    for i,change in ipairs(changes) do pause(checkpoint,"K2 boundary "..i); local raw=C.Copy(base); change(raw); k2Fail(raw,"boundary "..i) end
+     local legacy=scan(); legacy.tabs[1].paths[72].children={73}
+     eq(K.Evaluate(legacy).complete,true); legacy.policy=false; k2Fail(legacy,"no policy bypass")
+ end)
+-case("K2 graph coverage cycles shared paths duplicate tabs unreachable and all list bounds",function()
++case("K2 graph coverage cycles shared paths duplicate tabs unreachable and all list bounds",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c)
+     local changes={
+         function(s) s.tabs[1].coverageComplete=false end,
+@@ -2096,13 +2209,13 @@
+         function(s) s.tabs[1].paths[106192].costs[17]={ID=999,amount=1} end,
+         function(s) s.tabs[1].paths[106192].node.entryIDToRanksIncreased[999]=0 end,
+     }
+-    for i,change in ipairs(changes) do local raw=C.Copy(base); change(raw); k2Fail(raw,"graph/list "..i) end
++    for i,change in ipairs(changes) do pause(checkpoint,"K2 graph/list "..i); local raw=C.Copy(base); change(raw); k2Fail(raw,"graph/list "..i) end
+     for _,where in ipairs({"children","costs"}) do
+         local raw=C.Copy(base); setmetatable(raw.tabs[1].paths[106192][where],{}); k2Fail(raw,"metatable "..where)
+     end
+     local raw=C.Copy(base); setmetatable(raw.tabs,{}); k2Fail(raw,"metatable tabs")
+ end)
+-case("K2 raw projection omits malformed fields with false flags and always typed Core input",function()
++case("K2 raw projection omits malformed fields with false flags and always typed Core input",function(checkpoint)
+     local changes={
+         function(f) f.nodes[106192].ID=false end,
+         function(f) f.nodes[106192].ID=999 end,
+@@ -2124,6 +2237,7 @@
+         function(f) f.currencies[1122][1].quantity=-1 end,
+     }
+     for i,change in ipairs(changes) do
++        pause(checkpoint,"K2 projection variant "..i)
+         local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c)
+         eq(raw.nativeComplete,false,"project failure "..i); k2Fail(raw,"project failure "..i)
+         eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"sanitized typed raw "..i)
+@@ -2131,9 +2245,10 @@
+         assert(C.Apply(c.db,character,identity,obs,100,"fixture"),"safe partial raw is persistable "..i)
+     end
+ end)
+-case("K2 protected missing nil throwing APIs sanitize without secrets and mark all trees unknown",function()
++case("K2 protected missing nil throwing APIs sanitize without secrets and mark all trees unknown",function(checkpoint)
+     for _,pathName in ipairs({"GetNodeInfo","GetEntryInfo","GetNodeCost","GetTreeCurrencyInfo"}) do
+         for _,mode in ipairs({"missing","nil","error"}) do
++            pause(checkpoint,"K2 protected API variant")
+             local env,_,_,c=k2Fixture()
+             env.C_Traits[pathName]=mode=="missing" and nil or function()
+                 if mode=="error" then error("K2-PRIVATE-ERROR") end
+@@ -2148,9 +2263,10 @@
+         end
+     end
+ end)
+-case("K2 every projection list boundary dense malformed and inspection limited prefix",function()
++case("K2 every projection list boundary dense malformed and inspection limited prefix",function(checkpoint)
+     local function makeIDs(n) local a={}; for i=1,n do a[i]=800000+i end; return a end
+     for _,n in ipairs({16,17}) do
++        pause(checkpoint,"K2 cost boundary")
+         local _,_,f,c=k2Fixture(); f.costs[106192]={}
+         for i=1,n do f.costs[106192][i]={ID=800000+i,amount=1} end
+         local raw=k2Raw(c); eq(#raw.tabs[1].paths[106192].costs,math.min(n,16))
+@@ -2163,6 +2279,7 @@
+         eq(C.ValidPayload("knowledgeRaw",entryRaw,"observed"),true); k2Fail(entryRaw,"entry-specific costs")
+     end
+     for _,n in ipairs({32,33}) do
++        pause(checkpoint,"K2 entry boundary")
+         local _,_,f,c=k2Fixture(); f.nodes[106192].entryIDs=makeIDs(n)
+         f.nodes[106192].entryIDsWithCommittedRanks=makeIDs(n); f.nodes[106192].entryIDToRanksIncreased={}
+         for i=1,n do f.nodes[106192].entryIDToRanksIncreased[800000+i]=0 end
+@@ -2171,6 +2288,7 @@
+         eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true); k2Fail(raw,"unexpected entry structure")
+     end
+     for _,n in ipairs({64,65}) do
++        pause(checkpoint,"K2 currency boundary")
+         local _,_,f,c=k2Fixture()
+         for _,rows in pairs(f.currencies) do
+             local shared=table.remove(rows,1)
+@@ -2185,6 +2303,7 @@
+         function(a) a[2]=a[1] end,function(a) setmetatable(a,{}) end,
+     }) do
+         for _,kind in ipairs({"children","entries","currencies","costs"}) do
++            pause(checkpoint,"K2 malformed list variant")
+             local _,_,f,c=k2Fixture()
+             local a=kind=="children" and f.children[106192] or kind=="entries" and f.nodes[106192].entryIDs or
+                 kind=="currencies" and f.currencies[1122] or f.costs[106192]
+@@ -2194,8 +2313,9 @@
+         end
+     end
+ end)
+-case("K2 path children and tab projection bounds cycles and shared ownership never partial totals",function()
++case("K2 path children and tab projection bounds cycles and shared ownership never partial totals",function(checkpoint)
+     for _,n in ipairs({64,65}) do
++        pause(checkpoint,"K2 path boundary")
+         local env,_,f,c=k2Fixture()
+         f.tabs={f.tabs[1]}; local template=f.nodes[106192]
+         for i=1,n do
+@@ -2209,11 +2329,13 @@
+         eq(count,64); eq(raw.tabs[1].coverageComplete,n==64); eq(K.Evaluate(raw).complete,n==64)
+     end
+     for _,n in ipairs({8,9}) do
++        pause(checkpoint,"K2 tab boundary")
+         local env,_,_,c=k2Fixture()
+         env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() local a={}; for i=1,n do a[i]=1000+i end; return a end
+         local raw=k2Raw(c); eq(#raw.tabs,8); eq(raw.tabsComplete,n==8); k2Fail(raw,"tab bound no roots")
+     end
+     for _,n in ipairs({16,17}) do
++        pause(checkpoint,"K2 child boundary")
+         local _,_,f,c=k2Fixture(); f.children[106192]={}
+         for i=1,n do f.children[106192][i]=700000+i end
+         local raw=k2Raw(c); eq(#raw.tabs[1].paths[106192].children,math.min(n,16))
+@@ -2223,11 +2345,12 @@
+         function(f) f.children[106192]={106192} end,
+         function(f) f.children[106192]={106191,106191} end,
+         function(f) f.children[106280]={106191} end,
+-    }) do local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c); eq(raw.nativeComplete,false); k2Fail(raw) end
+-end)
+-case("K2 actual nonfinite projection and direct raw or provenance payloads reject atomically",function()
++    }) do pause(checkpoint,"K2 graph ownership variant"); local _,_,f,c=k2Fixture(); change(f); local raw=k2Raw(c); eq(raw.nativeComplete,false); k2Fail(raw) end
++end)
++case("K2 actual nonfinite projection and direct raw or provenance payloads reject atomically",function(checkpoint)
+     for _,sample in ipairs(nonfiniteSamples()) do
+         for _,target in ipairs({"rank","cost","currency","entry","map","source"}) do
++            pause(checkpoint,"K2 nonfinite projection variant")
+             local _,s,f,c=k2Fixture(); local v=sample.value
+             if target=="rank" then f.nodes[106192].ranksPurchased=v
+             elseif target=="cost" then f.costs[106192][1].amount=v
+@@ -2240,6 +2363,7 @@
+         end
+         local _,_,_,c=k2Fixture(); local raw=k2Raw(c); local r=K.Evaluate(raw)
+         for _,target in ipairs({"raw","tree"}) do
++            pause(checkpoint,"K2 nonfinite payload variant")
+             local obs=k2Observations(raw,r,100); local db=C.Open(nil); local verify=unchangedGraph(db)
+             if target=="raw" then obs.knowledgeRaw.value.sourceCounter=sample.value
+             else obs["tree:1122"].value.accountingEvidence.quantity=sample.value end
+@@ -2249,7 +2373,7 @@
+         end
+     end
+ end)
+-case("K2 Core typed new raw metadata and complete tree evidence rejects malformed direct scans",function()
++case("K2 Core typed new raw metadata and complete tree evidence rejects malformed direct scans",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local base=k2Raw(c); local result=K.Evaluate(base)
+     local changes={
+         function(o) o.knowledgeRaw.value.nativeComplete=1 end,
+@@ -2279,17 +2403,19 @@
+         function(o) o["tree:1122"].value.currencies[1].quantity=1 end,
+     }
+     for i,change in ipairs(changes) do
++        pause(checkpoint,"K2 typed payload variant "..i)
+         local obs=C.Copy(k2Observations(base,result,100)); change(obs)
+         local db=dbWith({unspent=8}); local verify=unchangedGraph(db)
+         eq(C.Apply(db,character,identity,obs,100,"fixture"),nil,"atomic malformed new "..i); verify()
+     end
+ end)
+-case("K2 Core reload archive wrong-scope native values reject untouched and legacy schema1 stays valid",function()
++case("K2 Core reload archive wrong-scope native values reject untouched and legacy schema1 stays valid",function(checkpoint)
+     local _,_,_,c=k2Fixture(); local raw=k2Raw(c); local r=K.Evaluate(raw)
+     local db=C.Open(nil); assert(C.Apply(db,character,identity,k2Observations(raw,r,100),100,"fixture"))
+     eq(C.Open(db),db); assert(C.Archive(db,character.guid,2913,110,"fixture")); eq(C.Open(db),db)
+     for _,mode in ipairs({"active","archive"}) do
+         for _,target in ipairs({"scope","raw","tree"}) do
++            pause(checkpoint,"K2 scope variant")
+             local copy=C.Copy(db); local p=copy.characters[character.guid].professions[2913]
+             local g=p.archives[1]
+             if mode=="active" then p.active=g; p.archives={}; g.archivedAt=nil; g.archiveReason=nil end
+@@ -2324,8 +2450,9 @@
+     eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].state.observedAt,100)
+     s.at=120; assert(c:Scan()); eq(g.fields["tree:1122"].last.observedAt,100,"old returned generation not mutated")
+ end)
+-case("K2 failed scan preserves ALL coherent trees omitted prior tabs index and nonfresh timestamps",function()
++case("K2 failed scan preserves ALL coherent trees omitted prior tabs index and nonfresh timestamps",function(checkpoint)
+     for _,mode in ipairs({"mismatch","missingtab","partialtabs","metadata"}) do
++        pause(checkpoint,"K2 stale variant")
+         local env,s,f,c=k2Fixture(); assert(c:Scan())
+         local old=c.db.characters[character.guid].professions[2913].active
+         local saved=C.Copy(old); s.at=120
+@@ -2352,8 +2479,9 @@
+     local rows=NS.ViewModel.Build(c.db,c.fresh,{},100)
+     for _,t in ipairs(rows[1].trees) do eq(t.purchased,nil); eq(t.ratio,nil); eq(t.state.known,false) end
+ end)
+-case("K2 changing identity source config revision and serial discard including reentrant scan",function()
++case("K2 changing identity source config revision and serial discard including reentrant scan",function(checkpoint)
+     for _,mode in ipairs({"identity","source","config","revision","serial","closed"}) do
++        pause(checkpoint,"K2 race variant")
+         local env,s,_,c=k2Fixture(); local original=env.C_Traits.GetNodeCost; local once=false
+         env.C_Traits.GetNodeCost=function(...)
+             if not once then
+@@ -2379,8 +2507,9 @@
+     eq(g.scannedAt,101,"only coherent inner scan committed"); eq(g.fields["tree:1122"].last.observedAt,101)
+     eq(next(c.fresh),nil,"outer invalidation cannot revive fresh tree")
+ end)
+-case("K2 staged unknown unavailable source and unsafe contexts stay nonnumeric without harming gear",function()
++case("K2 staged unknown unavailable source and unsafe contexts stay nonnumeric without harming gear",function(checkpoint)
+     for _,mode in ipairs({"starttrue","startnil","endtrue","endnil","stageerror","sourcenil","sourcefalse"}) do
++        pause(checkpoint,"K2 staging variant")
+         local env,s,_,c=k2Fixture(); local calls=0
+         env.C_Traits.ConfigHasStagedChanges=function()
+             calls=calls+1
+@@ -2406,7 +2535,7 @@
+     eq(g.fields.unspent.last,nil,"no unspent fabrication"); eq(g.fields["tree:1122"].last.value.purchased,0)
+ end)
+ 
+-case("K2 finite scalar ranges nullable failures and metatable node entry map projection",function()
++case("K2 finite scalar ranges nullable failures and metatable node entry map projection",function(checkpoint)
+     local setters={
+         function(f,v) f.nodes[106192].ID=v end,
+         function(f,v) f.nodes[106192].ranksPurchased=v end,
+@@ -2426,6 +2555,7 @@
+     }
+     for i,set in ipairs(setters) do
+         for _,value in ipairs({-1,0.5,2147483648,"1",false}) do
++            pause(checkpoint,"K2 range variant")
+             local _,_,f,c=k2Fixture(); set(f,value); local raw=k2Raw(c)
+             eq(raw.nativeComplete,false,"range projection "..i); k2Fail(raw,"range projection "..i)
+             eq(C.ValidPayload("knowledgeRaw",raw,"observed"),true,"range sanitization "..i)
+@@ -2443,10 +2573,11 @@
+         local _,_,_,c=k2Fixture(); c.serial=sample.value; eq(c:Scan(),false); eq(next(c.db.characters),nil)
+     end
+ end)
+-case("K2 missing nil throwing specialization reads remain bounded typed unknown not observed empty",function()
++case("K2 missing nil throwing specialization reads remain bounded typed unknown not observed empty",function(checkpoint)
+     for _,name in ipairs({"GetSpecTabIDsForSkillLine","GetTabInfo","GetRootPathForTab","GetChildrenForPath",
+         "GetUnlockEntryForPath","GetSpendEntryForPath","GetSpendCurrencyForPath"}) do
+         for _,mode in ipairs({"missing","nil","error"}) do
++            pause(checkpoint,"K2 specialization variant")
+             local env,_,_,c=k2Fixture()
+             env.C_ProfSpecs[name]=function() if mode=="error" then error("K2-PRIVATE-API") end end
+             if mode=="missing" then env.C_ProfSpecs[name]=nil end
+@@ -2457,15 +2588,19 @@
+     end
+ end)
+ 
+-case("K2 global copy budget rejects oversized payload atomically and scan retains failed tree history",function()
++case("K2 global copy budget rejects oversized payload atomically and scan retains failed tree history",function(checkpoint)
+     local _,s,_,c=k2Fixture(); assert(c:Scan()); s.at=120
+     local raw=k2Raw(c); raw.oversized={}
+     for i=1,50001 do raw.oversized[i]=0 end
+     local verify=unchangedGraph(c.db)
++    pause(checkpoint,"oversized fixture construction")
+     eq(C.Apply(c.db,character,identity,{knowledgeRaw=C.Observation("observed",raw,120,"fixture")},120,"fixture"),nil)
++    pause(checkpoint,"oversized Apply")
+     verify()
+     c.Knowledge=function() return raw end
++    pause(checkpoint,"oversized graph verified")
+     assert(c:Scan()); local g=c.db.characters[character.guid].professions[2913].active
++    pause(checkpoint,"oversized scan")
+     eq(g.fields.knowledgeRaw.last.observedAt,100); eq(g.fields.knowledgeRaw.attempt.status,"unknown")
+     for _,id in ipairs({1122,1124,1182,1125}) do
+         local f=g.fields["tree:"..id]; eq(f.last.observedAt,100); eq(f.attempt.status,"unknown")
+@@ -2485,8 +2620,9 @@
+     for _,rows in pairs(f.currencies) do rows[1].spent=293 end
+     return env,s,f,c
+ end
+-case("K2 correction near-cap next31 and MAX are separate evidence in pure Core and collector",function()
++case("K2 correction near-cap next31 and MAX are separate evidence in pure Core and collector",function(checkpoint)
+     for _,nextRank in ipairs({31,2147483647}) do
++        pause(checkpoint,"K2 next rank boundary")
+         local _,_,f,c=k2NearCapFixture(); f.nodes[106192].nextEntry.rank=nextRank
+         local raw=k2Raw(c); local p=raw.tabs[1].paths[106192]
+         eq(p.node.ranksPurchased,30); eq(p.node.maxRanks,31); eq(p.spend.maxRanks,30)
+@@ -2502,7 +2638,7 @@
+         eq(c.fresh[character.guid..":2913"].fields["tree:1122"],true)
+     end
+ end)
+-case("K2 correction next zero nonfinite overflow foreign or wrong-state still fails without relaxing active",function()
++case("K2 correction next zero nonfinite overflow foreign or wrong-state still fails without relaxing active",function(checkpoint)
+     local changes={
+         function(p) p.node.nextEntry.rank=0 end,
+         function(p) p.node.nextEntry.rank=-1 end,
+@@ -2518,6 +2654,7 @@
+         changes[#changes+1]=function(p) p.node.nextEntry.rank=value end
+     end
+     for i,change in ipairs(changes) do
++        pause(checkpoint,"K2 next guard "..i)
+         local _,_,_,c=k2NearCapFixture(); local raw=k2Raw(c); local result=K.Evaluate(raw)
+         local originalRaw=C.Copy(raw)
+         change(raw.tabs[1].paths[106192]); k2Fail(raw,"next/active guard "..i)
+@@ -2527,8 +2664,9 @@
+         verify()
+     end
+ end)
+-case("K2 correction every failed native index retains four visible stale trees own names and evidence",function()
++case("K2 correction every failed native index retains four visible stale trees own names and evidence",function(checkpoint)
+     for _,mode in ipairs({"reduced","nilname","errorname","changedname"}) do
++        pause(checkpoint,"K2 failed index variant")
+         local env,s,f,c=k2Fixture(); assert(c:Scan())
+         local prior=c.db.characters[character.guid].professions[2913].active
+         -- Deliberately distinct index labels exercise the own-tree name preference.
+@@ -2560,8 +2698,9 @@
+         end
+     end
+ end)
+-case("K2 correction failed native scan with no prior index shows only safe unknown identities",function()
++case("K2 correction failed native scan with no prior index shows only safe unknown identities",function(checkpoint)
+     for _,mode in ipairs({"reduced","nilname","errorname"}) do
++        pause(checkpoint,"K2 no prior index variant")
+         local env,_,f,c=k2Fixture()
+         if mode=="reduced" then f.tabs={f.tabs[1]}
+         elseif mode=="nilname" then env.C_ProfSpecs.GetTabInfo=function() return nil end
+@@ -2583,7 +2722,7 @@
+     if type(value)=="table" then for _,child in pairs(value) do count=count+k2ValueCount(child) end end
+     return count
+ end
+-local function k2CumulativeFixture(extra)
++local function k2CumulativeFixture(extra,checkpoint)
+     local _,_,_,collector=k2Fixture(); local raw=k2Raw(collector); local result=K.Evaluate(raw)
+     assert(result.complete)
+     local observations=k2Observations(raw,result,100)
+@@ -2593,52 +2732,77 @@
+     db.userMetadata={padding={},note="preserve unknown root data",flag=false,zero=0}
+     db.userFlag=false
+     local small=C.Copy(db)
++    pause(checkpoint,"budget small Copy")
+     assert(C.Apply(small,character,identity,observations,100,"fixture-build"))
++    pause(checkpoint,"budget small Apply")
+     local growth=k2ValueCount(small.characters[character.guid])-k2ValueCount(db.characters[character.guid])
+     assert(growth>1,"native payload increases assembled value count")
+     local padding=50000-k2ValueCount(db)-growth+extra
+     assert(C.Integer(padding,1),"positive boundary padding")
+     for i=1,padding do db.userMetadata.padding[i]=0 end
+     eq(k2ValueCount(db)+growth,50000+extra,"assembled boundary derived from actual candidate")
+-    assert(C.Copy(db),"old data fits independently"); eq(C.Open(db),db)
++    pause(checkpoint,"budget padding and count")
++    assert(C.Copy(db),"old data fits independently")
++    pause(checkpoint,"budget old Copy")
++    eq(C.Open(db),db)
++    pause(checkpoint,"budget old Open")
+     assert(C.Copy({character,identity,observations}),"incoming native scan fits independently")
++    pause(checkpoint,"budget incoming Copy")
+     return db,observations
+ end
+-case("K2 correction assembled candidate over global budget rejects atomically preserving every reference",function()
+-    local db,observations=k2CumulativeFixture(1)
++case("K2 correction assembled candidate over global budget rejects atomically preserving every reference",function(checkpoint)
++    local db,observations=k2CumulativeFixture(1,checkpoint)
+     local root,characters,old,metadata,other=db,db.characters,db.characters[character.guid],db.userMetadata,db.characters["Player-Fixture-Other"]
+     local generation=old.professions[2913].active
+     local verify=unchangedGraph(db)
++    pause(checkpoint,"budget graph snapshot")
+     local applied,why=C.Apply(db,character,identity,observations,100,"fixture-build")
++    pause(checkpoint,"budget rejecting Apply")
+     eq(applied,nil); assert(why:find("Assembled snapshot",1,true),"clear bounded assembled-budget error")
+     verify(); eq(db,root); eq(db.characters,characters); eq(db.characters[character.guid],old)
+     eq(db.userMetadata,metadata); eq(db.userFlag,false); eq(db.userMetadata.flag,false); eq(db.userMetadata.zero,0)
+     eq(db.characters["Player-Fixture-Other"],other); eq(old.professions[2913].active,generation)
+     eq(generation.scannedAt,10); eq(generation.fields.unspent.last.value,8)
++    pause(checkpoint,"budget rejection graph verified")
+     eq(C.Open(db),db,"old DB still opens after rejection")
++    pause(checkpoint,"budget rejected Open")
+     local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(rows[1].unspent,8)
++    pause(checkpoint,"budget active ViewModel")
+     assert(C.Archive(db,character.guid,2913,110,"fixture management after rejection"))
+-    eq(C.Open(db),db); eq(#NS.ViewModel.Build(db,{}, {},111),0)
++    pause(checkpoint,"budget Archive")
++    eq(C.Open(db),db)
++    pause(checkpoint,"budget archived Open")
++    eq(#NS.ViewModel.Build(db,{}, {},111),0)
++    pause(checkpoint,"budget hidden ViewModel")
+     eq(#NS.ViewModel.Build(db,{}, {archived=true},111),1)
+-    assert(C.Delete(db,{guid=character.guid,id=2913,generation=1},true)); eq(C.Open(db),db)
++    pause(checkpoint,"budget archived ViewModel")
++    assert(C.Delete(db,{guid=character.guid,id=2913,generation=1},true))
++    pause(checkpoint,"budget Delete")
++    eq(C.Open(db),db)
++    pause(checkpoint,"budget deleted Open")
+     eq(db.userMetadata,metadata); eq(db.characters["Player-Fixture-Other"],other)
+ end)
+-case("K2 correction assembled exact-budget native candidate fits reopens and preserves unrelated root keys",function()
+-    local db,observations=k2CumulativeFixture(0)
++case("K2 correction assembled exact-budget native candidate fits reopens and preserves unrelated root keys",function(checkpoint)
++    local db,observations=k2CumulativeFixture(0,checkpoint)
+     local characters,metadata,other=db.characters,db.userMetadata,db.characters["Player-Fixture-Other"]
+     local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
+-    eq(k2ValueCount(db),50000); eq(C.Open(db),db,"new native snapshot immediately reopens")
++    pause(checkpoint,"exact budget Apply")
++    eq(k2ValueCount(db),50000)
++    pause(checkpoint,"exact budget count")
++    eq(C.Open(db),db,"new native snapshot immediately reopens")
++    pause(checkpoint,"exact budget Open")
+     eq(db.characters,characters); eq(db.userMetadata,metadata); eq(db.userFlag,false)
+     eq(db.characters["Player-Fixture-Other"],other); eq(db.characters[character.guid].userMetadata.note,"preserve character metadata")
+     eq(g.scannedAt,100); eq(g.fields["tree:1122"].last.value.purchased,0)
+     local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(#rows[1].trees,4)
++    pause(checkpoint,"exact budget ViewModel")
+     eq(rows[1].trees[1].purchased,0); eq(rows[1].trees[1].state.fresh,false)
+ end)
+ 
+ -- Alias-safe assembly fixtures retain all prior93 cases. Count every reachable
+ -- alias occurrence just as Core.Copy does, while preserving original graph identity.
+-local function k2AliasedCumulativeFixture(mode,extra)
+-    local db,observations=k2CumulativeFixture(0)
++local function k2AliasedCumulativeFixture(mode,extra,checkpoint)
++    local db,observations=k2CumulativeFixture(0,checkpoint)
+     db.userMetadata.padding={}
+     local old=db.characters[character.guid]
+     db.savedCharacter=old
+@@ -2650,7 +2814,9 @@
+     db.sharedLabels={text="preserve shared primitive values",flag=false,zero=0}
+     db.secondaryLabels=db.sharedLabels
+     local small=C.Copy(db)
++    pause(checkpoint,"alias small Copy")
+     assert(C.Apply(small,character,identity,observations,100,"fixture-build"))
++    pause(checkpoint,"alias small Apply")
+     local growth=k2ValueCount(small.characters[character.guid])-k2ValueCount(old)
+     assert(growth>1)
+     local expandedGrowth=growth*(aliases+1)
+@@ -2658,19 +2824,27 @@
+     assert(C.Integer(padding,1))
+     for i=1,padding do db.userMetadata.padding[i]=0 end
+     eq(k2ValueCount(db)+expandedGrowth,50000+extra,"all map aliases see the new candidate")
++    pause(checkpoint,"alias expanded boundary count")
+     if aliases>0 then
+         assert(k2ValueCount(db)+growth<=50000,"old shallow/alias-duplicating preflight would undercount and fit")
+     end
+-    assert(C.Copy(db),"aliased old data fits independently"); eq(C.Open(db),db)
++    pause(checkpoint,"alias padding and counts")
++    assert(C.Copy(db),"aliased old data fits independently")
++    pause(checkpoint,"alias old Copy")
++    eq(C.Open(db),db)
++    pause(checkpoint,"alias old Open")
+     assert(C.Copy({character,identity,observations}),"incoming scan fits independently")
++    pause(checkpoint,"alias incoming Copy")
+     return db,observations
+ end
+-case("K2 alias mirror root nested and multiple map aliases reject cumulative expansion graph-identically",function()
++case("K2 alias mirror root nested and multiple map aliases reject cumulative expansion graph-identically",function(checkpoint)
+     for _,mode in ipairs({"root","nested","both"}) do
+-        local db,observations=k2AliasedCumulativeFixture(mode,1)
++        local db,observations=k2AliasedCumulativeFixture(mode,1,checkpoint)
+         local root,characters,old,metadata,other=db,db.characters,db.characters[character.guid],db.userMetadata,db.characters["Player-Fixture-Other"]
+         local verify=unchangedGraph(db)
++        pause(checkpoint,"alias graph snapshot "..mode)
+         local result,why=C.Apply(db,character,identity,observations,100,"fixture-build")
++        pause(checkpoint,"alias rejecting Apply "..mode)
+         eq(result,nil,mode); assert(why:find("Assembled snapshot",1,true),mode)
+         verify(); eq(db,root); eq(db.characters,characters); eq(db.characters[character.guid],old)
+         eq(db.userMetadata,metadata); eq(db.savedCharacter,old); eq(old.professions[2913].active.scannedAt,10)
+@@ -2678,17 +2852,25 @@
+         if mode~="nested" then eq(db.userAlias,characters) end
+         if mode~="root" then eq(db.userMetadata.nested.charactersMap,characters) end
+         eq(db.sharedLabels,db.secondaryLabels); eq(db.sharedLabels.flag,false); eq(db.sharedLabels.zero,0)
+-        eq(C.Open(db),db); local rows=NS.ViewModel.Build(db,{}, {},100)
++        pause(checkpoint,"alias graph verified "..mode)
++        eq(C.Open(db),db)
++        pause(checkpoint,"alias rejected Open "..mode)
++        local rows=NS.ViewModel.Build(db,{}, {},100)
+         eq(#rows,1); eq(rows[1].unspent,8)
+-    end
+-end)
+-case("K2 alias mirror fitting root nested and multiple map aliases retain real identity and reopen",function()
++        pause(checkpoint,"alias rejected ViewModel "..mode)
++    end
++end)
++case("K2 alias mirror fitting root nested and multiple map aliases retain real identity and reopen",function(checkpoint)
+     for _,mode in ipairs({"root","nested","both"}) do
+-        local db,observations=k2AliasedCumulativeFixture(mode,0)
++        local db,observations=k2AliasedCumulativeFixture(mode,0,checkpoint)
+         local characters,old,metadata,labels,other=db.characters,db.characters[character.guid],db.userMetadata,db.sharedLabels,db.characters["Player-Fixture-Other"]
+         local oldUnchanged=unchangedGraph(old)
+         local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
+-        eq(k2ValueCount(db),50000,mode); eq(C.Open(db),db)
++        pause(checkpoint,"alias fitting Apply "..mode)
++        eq(k2ValueCount(db),50000,mode)
++        pause(checkpoint,"alias fitting count "..mode)
++        eq(C.Open(db),db)
++        pause(checkpoint,"alias fitting Open "..mode)
+         eq(db.characters,characters); eq(db.userMetadata,metadata); eq(db.characters["Player-Fixture-Other"],other)
+         assert(db.characters[character.guid]~=old,"only the map key changes to the cloned candidate")
+         if mode~="nested" then eq(db.userAlias,characters); eq(db.userAlias[character.guid].professions[2913].active,g) end
+@@ -2697,30 +2879,305 @@
+         eq(db.sharedLabels,labels); eq(db.secondaryLabels,labels); eq(labels.flag,false); eq(labels.zero,0)
+         eq(g.scannedAt,100); eq(g.fields["tree:1122"].last.value.purchased,0)
+         local rows=NS.ViewModel.Build(db,{}, {},100); eq(#rows,1); eq(#rows[1].trees,4)
+-    end
+-end)
+-case("K2 alias mirror old-character aliases remain old rather than rewritten to the candidate",function()
+-    local db,observations=k2AliasedCumulativeFixture("old-character-only",0)
++        pause(checkpoint,"alias fitting ViewModel "..mode)
++    end
++end)
++case("K2 alias mirror old-character aliases remain old rather than rewritten to the candidate",function(checkpoint)
++    local db,observations=k2AliasedCumulativeFixture("old-character-only",0,checkpoint)
+     local old=db.characters[character.guid]; db.nestedOld={character=old}
+     -- Account for this additional unchanged alias without changing the fit target.
+     local remove=k2ValueCount(db.nestedOld)
+     for _=1,remove do db.userMetadata.padding[#db.userMetadata.padding]=nil end
+     eq(C.Open(db),db)
++    pause(checkpoint,"old alias Open")
+     local before=unchangedGraph(old); local characters=db.characters; local nested=db.nestedOld
+     local g,why=C.Apply(db,character,identity,observations,100,"fixture-build"); assert(g,why)
+-    eq(k2ValueCount(db),50000); eq(C.Open(db),db)
++    pause(checkpoint,"old alias Apply")
++    eq(k2ValueCount(db),50000)
++    pause(checkpoint,"old alias count")
++    eq(C.Open(db),db)
++    pause(checkpoint,"old alias final Open")
+     eq(db.characters,characters); eq(db.savedCharacter,old); eq(db.nestedOld,nested); eq(nested.character,old)
+     assert(db.characters[character.guid]~=old); before()
+     eq(old.professions[2913].active.fields.unspent.last.value,8)
+     eq(g.fields.unspent.last.value,0); eq(g.fields["tree:1122"].last.value.purchased,0)
+ end)
+ 
+-function Tests.Run()
+-    local results={passed=0, failed=0, lines={}}
+-    for _, t in ipairs(Tests.cases) do
+-        local ok, why=pcall(t.fn)
+-        if ok then results.passed=results.passed+1 else results.failed=results.failed+1 end
+-        results.lines[#results.lines+1]=(ok and "PASS " or "FAIL ")..t.name..(ok and "" or ": "..tostring(why))
+-    end
+-    return results
+-end
++-- K3 fixtures use ONLY small isolated cases, never recursively execute this suite.
++local function tinyCases(log)
++    return {
++        {name="tiny multi",fn=function(checkpoint)
++            log[#log+1]="a"; checkpoint("first|\nunit")
++            log[#log+1]="b"; checkpoint(string.rep("x",200))
++            log[#log+1]="c"
++        end},
++        {name="tiny error",fn=function() log[#log+1]="error"; error("synthetic failure") end},
++        {name="tiny last",fn=function() log[#log+1]="last" end},
++    }
++end
++case("K3 runner counts only whole cases and exactly one safe unit per Step",function()
++    local log={}; local r=Tests.NewRunner(tinyCases(log))
++    eq(r.total,3); eq(r.passed,0); eq(r.failed,0); eq(#log,0)
++    r:Step(); eq(#log,1); eq(r.index,1); eq(r.unit,1); eq(r.passed,0); eq(#r.lines,0)
++    assert(not r.label:find("[|%c]")); eq(r.label,"first  unit")
++    r:Step(); eq(#log,2); eq(r.unit,2); eq(#r.label,128); eq(r.passed,0)
++    r:Step(); eq(#log,3); eq(r.passed,1); eq(#r.lines,1); assert(r.lastLine:find("PASS tiny multi",1,true))
++    r:Step(); eq(r.failed,1); eq(#r.lines,2); assert(r.lastLine:find("synthetic failure",1,true))
++    r:Step(); eq(r.passed,2); eq(r.status,"complete"); eq(r.completed,true); eq(#r.lines,3)
++    r:Step(); eq(r.lastLine,nil); eq(#log,5); eq(r.failed,1)
++end)
++case("K3 Run drains same units assertions and snapshots cases independent of caller edits",function()
++    local a,b={},{}; local cases=tinyCases(a); local r=Tests.NewRunner(cases)
++    cases[1].fn=function() error("mutated caller") end; cases[1].name="mutated"
++    while r.status=="running" do r:Step() end
++    local sync=Tests.Run(tinyCases(b))
++    eq(table.concat(a,","),table.concat(b,",")); eq(r.passed,sync.passed); eq(r.failed,sync.failed)
++    eq(r.total,sync.total); eq(table.concat(r.lines,"\n"),table.concat(sync.lines,"\n"))
++    eq(sync.completed,true); eq(sync.steps,5); eq(r.lines[1],"PASS tiny multi")
++    local empty=Tests.Run({}); eq(empty.completed,true); eq(empty.passed,0); eq(empty.total,0)
++    local incompleteRun=Tests.Run(false); eq(incompleteRun.completed,false)
++    assert(incompleteRun.lines[1]:find("INCOMPLETE",1,true))
++end)
++case("K3 cancel midcase releases work and cannot resume or manufacture pass",function()
++    local log={}; local r=Tests.NewRunner(tinyCases(log))
++    r:Step(); r:Cancel(); eq(r.status,"incomplete"); eq(r.completed,false)
++    eq(r.passed,0); eq(r.failed,0); eq(#r.lines,0)
++    for _=1,3 do r:Step(); r:Cancel() end
++    eq(#log,1); eq(r.steps,1); eq(r.reason,"cancelled")
++end)
++case("K3 malformed cases unexpected yield and case cap are explicit incomplete",function()
++    for _,value in ipairs({false,1,"bad",{false},{[2]={name="sparse",fn=function() end}},
++        {{name=false,fn=function() end}},{{name="bad",fn=false}},setmetatable({},{})}) do
++        local r=Tests.NewRunner(value); eq(r.status,"incomplete"); eq(r.completed,false)
++        r:Step(); eq(r.passed,0)
++    end
++    local cases={}; for i=1,512 do cases[i]={name="cap",fn=function() end} end
++    local r=Tests.NewRunner(cases); eq(r.total,512); eq(r.status,"running"); r:Cancel()
++    cases[513]={name="too many",fn=function() end}
++    eq(Tests.NewRunner(cases).status,"incomplete")
++    cases={[513]={name="out of range",fn=function() end}}
++    eq(Tests.NewRunner(cases).status,"incomplete")
++    r=Tests.NewRunner({{name="unexpected",fn=function() coroutine.yield("foreign") end}})
++    r:Step(); eq(r.status,"incomplete"); eq(r.failed,0); eq(r.passed,0); eq(#r.lines,0)
++    eq(r.reason,"unexpected coroutine yield")
++end)
++case("K3 step cap bounds neverending fake case without truncating success",function(checkpoint)
++    local reached=0
++    local r=Tests.NewRunner({{name="many units",fn=function(cp) while true do reached=reached+1; cp("bounded") end end}})
++    for i=1,10000 do
++        r:Step()
++        if i%100==0 then pause(checkpoint,"K3 isolated step cap chunk") end
++    end
++    eq(reached,10000); eq(r.status,"running"); r:Step()
++    eq(r.status,"incomplete"); eq(r.reason,"10000 step cap"); eq(r.completed,false)
++    r:Step(); eq(reached,10000); eq(r.passed,0); eq(r.failed,0)
++end)
++case("K3 unsafe checkpoint throws before yield and protected finally restores overrides",function()
++    local apply,evaluate=C.Apply,K.Evaluate; local restored=false; local continued=false
++    local r=Tests.NewRunner({{name="unsafe cleanup",fn=function(cp)
++        C.Apply=function() error("trap") end; K.Evaluate=function() error("trap") end
++        local ok,why=pcall(function() cp("must not yield"); continued=true end)
++        C.Apply=apply; K.Evaluate=evaluate; restored=true
++        assert(ok,why)
++    end},{name="after cleanup",fn=function() eq(C.Apply,apply); eq(K.Evaluate,evaluate) end}})
++    r:Step(); eq(restored,true); eq(continued,false); eq(r.failed,1); eq(r.status,"running")
++    assert(r.lines[1]:find("unsafe checkpoint",1,true)); eq(C.Apply,apply); eq(K.Evaluate,evaluate)
++    r:Step(); eq(r.completed,true); eq(r.passed,1)
++end)
++case("K3 unexpected function drift at return or between frames stops without overwriting",function()
++    local original=C.Apply
++    local replacement=function() end
++    local ok,why=pcall(function()
++        local r=Tests.NewRunner({{name="drift return",fn=function() C.Apply=replacement end}})
++        r:Step(); eq(r.status,"incomplete"); eq(r.passed,0); eq(C.Apply,replacement)
++        C.Apply=original
++        r=Tests.NewRunner({{name="drift between",fn=function(cp) cp(); error("must not resume") end}})
++        r:Step(); C.Apply=replacement; r:Step()
++        eq(r.status,"incomplete"); eq(r.steps,1); eq(C.Apply,replacement); eq(#r.lines,0)
++        assert(r.reason:find("reload required",1,true))
++    end)
++    C.Apply=original -- only this fixture's known override; runner never restores it
++    assert(ok,why)
++end)
++
++local function schedulerFixture(cases)
++    local s={now=10,frames={},chat={},log={}}
++    local function forbidden() error("selftest touched DB/Login/timer/gameplay") end
++    local db={sentinel=true}
++    local env={CraftArmyDB=db,InCombatLockdown=function() return s.combat or false end,
++        debugprofilestop=function() return s.now end,
++        C_Timer={After=forbidden},UnitGUID=forbidden,CraftRecipe=forbidden,EquipItemByName=forbidden}
++    env.DEFAULT_CHAT_FRAME={AddMessage=function(_,line)
++        if s.chatError then error("synthetic output failure") end
++        s.chat[#s.chat+1]=line
++    end}
++    env.CreateFrame=function(kind,name,parent,template)
++        eq(kind,"Frame"); eq(name,nil); eq(parent,nil); eq(template,nil)
++        if s.frameError=="create" then error("synthetic frame failure") end
++        local frame={scripts={},shown=false}
++        s.frames[#s.frames+1]=frame
++        function frame:SetScript(key,fn)
++            eq(key,"OnUpdate")
++            if s.frameError=="script" then error("synthetic script failure") end
++            self.scripts[key]=fn
++        end
++        function frame:Show() if s.frameError=="show" then error("synthetic Show failure") end; self.shown=true end
++        function frame:Hide() self.shown=false end
++        return frame
++    end
++    local commands=NS.Commands.New(env,function() return Tests.NewRunner(cases or tinyCases(s.log)) end)
++    commands.Login=forbidden
++    function s:Tick()
++        local frame=self.frames[#self.frames]; local fn=frame and frame.scripts.OnUpdate
++        if fn then fn(frame,0.016) end
++    end
++    function s:CheckStopped(status)
++        eq(commands.selftest,nil); eq(commands.selftestFrame,nil)
++        eq(commands.selftestSummary.status,status or "incomplete")
++        local frame=self.frames[#self.frames]
++        if frame then eq(frame.shown,false); eq(frame.scripts.OnUpdate,nil) end
++        eq(env.CraftArmyDB,db); eq(db.sentinel,true); eq(commands.collector,nil); eq(commands.dashboard,nil)
++    end
++    return commands,env,s
++end
++case("K3 command explicit start one unit per OnUpdate repeat status cancel restart preLogin",function()
++    local cmd,env,s=schedulerFixture()
++    eq(#s.frames,0); eq(#s.log,0)
++    local r=cmd:Run(" selftest "); eq(#s.frames,1); eq(#s.log,0); eq(r.steps,0)
++    eq(cmd:Run("selftest"),r); eq(#s.frames,1); eq(#s.log,0)
++    s:Tick(); eq(#s.log,1); eq(r.steps,1); eq(r.passed,0)
++    s:Tick(); eq(#s.log,2); eq(r.steps,2)
++    cmd:Run("selftest cancel"); s:CheckStopped(); eq(r.completed,false); eq(r.passed,0)
++    s:Tick(); eq(#s.log,2)
++    cmd:Run("selftest cancel"); eq(#s.frames,1)
++    cmd:Run("selftest"); eq(#s.frames,2); s:Tick(); eq(#s.log,3)
++    cmd:Run("selftest cancel"); s:CheckStopped()
++    eq(env.C_Timer.After~=nil,true)
++end)
++case("K3 command normal completion errors once bounded output elapsed max and no extra callbacks",function()
++    local cmd,_,s=schedulerFixture(); local r=cmd:Run("selftest")
++    for i=1,5 do s.now=s.now+2; s:Tick(); eq(r.steps,i) end
++    s:CheckStopped("complete"); eq(cmd.selftestSummary.completed,true)
++    eq(cmd.selftestSummary.passed,2); eq(cmd.selftestSummary.failed,1); eq(cmd.selftestSummary.elapsed,10)
++    local text=table.concat(s.chat,"\n"); local _,passes=text:gsub("PASS tiny multi","")
++    local _,failures=text:gsub("FAIL tiny error",""); eq(passes,1); eq(failures,1)
++    assert(text:find("COMPLETE: 2 passed; 1 failed of 3",1,true)); assert(text:find("not client API evidence",1,true))
++    local n=#s.chat; s:Tick(); eq(#s.chat,n); eq(r.steps,5)
++end)
++case("K3 command bad arguments absent clock frames and combat never start or Login",function()
++    for _,mode in ipairs({"args","combat","unknown","clockmissing","clockthrow","nan","infinity","frames"}) do
++        local cmd,env,s=schedulerFixture()
++        if mode=="combat" then s.combat=true
++        elseif mode=="unknown" then env.InCombatLockdown=function() return nil end
++        elseif mode=="clockmissing" then env.debugprofilestop=nil
++        elseif mode=="clockthrow" then env.debugprofilestop=function() error("clock") end
++        elseif mode=="nan" then env.debugprofilestop=function() return 0/0 end
++        elseif mode=="infinity" then env.debugprofilestop=function() return math.huge end
++        elseif mode=="frames" then env.CreateFrame=nil end
++        cmd:Run(mode=="args" and "selftest bad extra" or "selftest")
++        eq(cmd.selftest,nil); eq(#s.frames,0); eq(#s.log,0); eq(cmd.collector,nil)
++        if mode=="args" then assert(table.concat(s.chat):find("Usage:",1,true)) end
++    end
++    for _,bad in ipairs({{v=nil},{v="1"},{v=false},{v=0/0},{v=math.huge},{v=1e308},{throws=true}}) do
++        local cmd,env,s=schedulerFixture(); env.debugprofilestop=nil
++        env.GetTimePreciseSec=function() if bad.throws then error("seconds source") end; return bad.v end
++        cmd:Run("selftest"); eq(cmd.selftest,nil); eq(#s.frames,0); eq(#s.log,0)
++    end
++end)
++case("K3 command clock seconds fallback finite monotonic and failure stops before next unit",function()
++    local cmd,env,s=schedulerFixture(); env.debugprofilestop=nil
++    env.GetTimePreciseSec=function() return s.now/1000 end
++    cmd:Run("selftest"); s.now=20; s:Tick(); eq(#s.log,1)
++    s.now=30; cmd:Run("selftest cancel"); s:CheckStopped()
++    for _,mode in ipairs({"backward","nan","infinity","throw","badtype"}) do
++        cmd,env,s=schedulerFixture(); cmd:Run("selftest"); s:Tick(); eq(#s.log,1)
++        if mode=="backward" then s.now=9
++        else env.debugprofilestop=nil -- captured clock still calls s.now through its original closure
++            if mode=="nan" then s.now=0/0 elseif mode=="infinity" then s.now=math.huge
++            elseif mode=="badtype" then s.now="bad" else
++                -- A fresh session captures a throwing source after its first read.
++                cmd:Run("selftest cancel"); local calls=0
++                env.debugprofilestop=function() calls=calls+1; if calls>1 then error("late clock") end; return 10 end
++                cmd:Run("selftest")
++            end
++        end
++        s:Tick(); s:CheckStopped(); eq(#s.log,1)
++    end
++    for _,bad in ipairs({9,0/0,math.huge,"bad"}) do
++        local state
++        local cases={{name="clock breaks in final unit",fn=function() state.now=bad end}}
++        cmd,env,s=schedulerFixture(cases); state=s
++        cmd:Run("selftest"); s:Tick(); s:CheckStopped()
++        eq(cmd.selftestSummary.completed,false)
++        assert(not table.concat(s.chat):find("PASS clock breaks",1,true))
++    end
++end)
++case("K3 command slow unit including LAST passing callback is incomplete not completed PASS",function()
++    for _,mode in ipairs({"yield","lastpass","lastfail"}) do
++        local last=mode~="yield"
++        local sref
++        local cases={{name="slow atomic",fn=function(cp)
++            sref.now=sref.now+101
++            if not last then cp("slow boundary") end
++            if mode=="lastfail" then error("last slow failure") end
++        end}}
++        local cmd,_,s=schedulerFixture(cases); sref=s
++        local r=cmd:Run("selftest"); s:Tick(); s:CheckStopped()
++        eq(r.completed,false); eq(r.status,"incomplete"); eq(r.passed,mode=="lastpass" and 1 or 0)
++        eq(r.failed,mode=="lastfail" and 1 or 0)
++        eq(cmd.selftestSummary.maxUnit,101); eq(cmd.selftestSummary.elapsed,101)
++        eq(cmd.selftestSummary.name,"slow atomic"); assert(cmd.selftestSummary.reason:find("101.0ms",1,true))
++        local text=table.concat(s.chat,"\n"); assert(text:find("INCOMPLETE",1,true))
++        assert(not text:find("PASS slow atomic",1,true)); assert(not text:find("\nCraftArmy: COMPLETE",1,true))
++    end
++end)
++case("K3 command progress per ten cases and per second in long case has bounded metadata",function()
++    local cases={}; for i=1,11 do cases[i]={name="progress"..i,fn=function() end} end
++    local cmd,_,s=schedulerFixture(cases); cmd:Run("selftest")
++    for _=1,10 do s:Tick() end
++    assert(table.concat(s.chat):find("PROGRESS: 10 passed",1,true)); s:Tick(); s:CheckStopped("complete")
++    cmd,_,s=schedulerFixture(); cmd:Run("selftest"); s.now=1010; s:Tick()
++    assert(table.concat(s.chat):find("PROGRESS: 0 passed",1,true))
++    eq(cmd.selftest.elapsed,1000); eq(cmd.selftest.maxUnit,0)
++    cmd:Run("selftest cancel"); s:CheckStopped()
++end)
++case("K3 command entering combat stops before work event preLogin and no automatic resume",function()
++    for _,mode in ipairs({"poll","event","unknown"}) do
++        local cmd,env,s=schedulerFixture(); local r=cmd:Run("selftest"); s:Tick(); eq(#s.log,1)
++        if mode=="event" then cmd:Event("PLAYER_REGEN_DISABLED")
++        else
++            if mode=="unknown" then env.InCombatLockdown=function() error("combat unavailable") end else s.combat=true end
++            s:Tick()
++        end
++        s:CheckStopped(); eq(r.steps,1); eq(#s.log,1)
++        s.combat=false; env.InCombatLockdown=function() return false end
++        cmd:Event("PLAYER_REGEN_ENABLED"); s:Tick(); eq(#s.log,1); eq(#s.frames,1)
++    end
++end)
++case("K3 command frame setup runner callback and output exceptions release active driver",function()
++    for _,mode in ipairs({"create","script","show","step","output"}) do
++        local cmd,_,s=schedulerFixture()
++        if mode=="create" or mode=="script" or mode=="show" then s.frameError=mode end
++        local r=cmd:Run("selftest")
++        if mode=="step" then r.Step=function() error("synthetic Step failure") end; s:Tick()
++        elseif mode=="output" then s.chatError=true; s:Tick(); s:Tick(); s:Tick() end
++        -- Setup SetScript itself may be unavailable; that failed call never installed a callback.
++        s:CheckStopped(); eq(cmd.selftestSummary.completed,false)
++    end
++    local cmd,env,s=schedulerFixture()
++    cmd=NS.Commands.New(env,function() error("factory exception") end)
++    cmd.Login=function() error("no Login") end
++    cmd:Run("selftest"); eq(cmd.selftest,nil); eq(cmd.selftestFrame,nil); eq(#s.frames,0)
++    assert(table.concat(s.chat):find("INCOMPLETE",1,true))
++    cmd,env,s=schedulerFixture(); cmd:Run("selftest"); s.chatError=true
++    cmd:Run("selftest"); s:CheckStopped(); eq(#s.log,0)
++end)
++
++function Tests.Run(cases)
++    local runner=Tests.NewRunner(cases)
++    while runner.status=="running" do runner:Step() end
++    if not runner.completed then
++        runner.lines[#runner.lines+1]="INCOMPLETE: "..(runner.reason or "runner stopped")
++    end
++    return runner
++end
+# CraftArmy/Commands.lua baselineSHA256=fb4bdcd48b0f53ecdfde18b7928fa967959d5383f0ee6e8b32a5e0edba639b70 targetSHA256=b858f4d7752a06bbea55ae2127bd7011a03cd8e726abf49fcad29f7a9171eef3
+--- K2/CraftArmy/Commands.lua
++++ K3/CraftArmy/Commands.lua
+@@ -1,10 +1,131 @@
+ local _, NS = ...
+ local Commands = {}
+ NS.Commands = Commands
+-function Commands.New(env)
++function Commands.New(env,runnerFactory)
+     local self={env=env}
+     local function printLine(message)
+         if env.DEFAULT_CHAT_FRAME then env.DEFAULT_CHAT_FRAME:AddMessage("CraftArmy: "..tostring(message)) end
++    end
++    local function safeCombat()
++        if type(env.InCombatLockdown)~="function" then return false end
++        local ok,value=pcall(env.InCombatLockdown)
++        return ok and value==false
++    end
++    local function identity(s)
++        local r=s.runner
++        return "case "..tostring(r and r.index or s.index or 0).."/"..tostring(s.total).." "..
++            tostring(r and r.name or s.name or "not started").." unit "..tostring(r and r.unit or s.unit or 0)..
++            " ["..tostring(r and r.label or s.label or "entry").."]"
++    end
++    local function progress(s,prefix)
++        local r=s.runner
++        printLine(prefix..": "..r.passed.." passed; "..r.failed.." failed; "..identity(s)..
++            string.format("; wall %.1fms; max unit %.1fms",s.elapsed,s.maxUnit))
++    end
++    local readClock
++    local function finish(s,reason)
++        if self.selftest~=s then return end
++        self.selftest=nil -- retire before any injected cleanup/output can fail
++        if not pcall(readClock,s) then reason=(reason and reason.."; " or "").."invalid stop clock (last valid wall time shown)" end
++        local r=s.runner
++        s.index=r.index; s.name=r.name; s.label=r.label; s.unit=r.unit
++        if reason or r.status~="complete" or r.completed~=true then
++            reason=reason or r.reason or "runner incomplete"
++            pcall(r.Cancel,r,reason)
++            r.status="incomplete"; r.completed=false; r.reason=reason
++        end
++        if s.frame then
++            pcall(s.frame.SetScript,s.frame,"OnUpdate",nil)
++            pcall(s.frame.Hide,s.frame)
++        end
++        self.selftestFrame=nil
++        s.frame=nil; s.runner=nil; s.clock=nil
++        self.selftestSummary={status=r.status,completed=r.completed,passed=r.passed,failed=r.failed,
++            total=s.total,index=s.index,name=s.name,label=s.label,unit=s.unit,elapsed=s.elapsed,maxUnit=s.maxUnit,
++            maxIdentity=s.maxIdentity,reason=reason}
++        pcall(printLine,(r.completed and "COMPLETE" or "INCOMPLETE")..": "..r.passed.." passed; "..r.failed..
++            " failed of "..s.total.."; "..identity(s)..string.format("; wall %.1fms; max unit %.1fms",s.elapsed,s.maxUnit)..
++            "; max at "..tostring(s.maxIdentity or "none")..(reason and "; "..reason or "")..
++            " (pure injected fixtures, not client API evidence)")
++    end
++    readClock=function(s)
++        local ok,value=pcall(s.clock)
++        if not ok or not NS.Core.Finite(value) or value<s.lastTime then error("unusable/backward selftest clock",0) end
++        local elapsed=value-s.started
++        if not NS.Core.Finite(elapsed) then error("nonfinite elapsed selftest clock",0) end
++        s.lastTime=value; s.elapsed=elapsed
++        return value
++    end
++    local function startSelftest()
++        if self.selftest then
++            local s=self.selftest
++            if not safeCombat() then finish(s,"combat/unknown safety; no automatic resume"); return end
++            local ok=pcall(function() readClock(s); progress(s,"RUNNING") end)
++            if not ok then finish(s,"status callback or clock failure") end
++            return s.runner
++        end
++        if not safeCombat() then printLine("Selftest not started: combat/unknown safety."); return end
++        local clock
++        if type(env.debugprofilestop)=="function" then clock=env.debugprofilestop
++        elseif type(env.GetTimePreciseSec)=="function" then clock=function()
++            local value=env.GetTimePreciseSec()
++            if not NS.Core.Finite(value) then error("invalid seconds clock",0) end
++            return value*1000
++        end end
++        local ok,now=false,nil
++        if clock then ok,now=pcall(clock) end
++        if not ok or not NS.Core.Finite(now) or type(env.CreateFrame)~="function" then
++            printLine("Selftest not started: usable finite clock and native Frame required."); return
++        end
++        local s={clock=clock,started=now,lastTime=now,elapsed=0,maxUnit=0,total=0,progressAt=now,progressCount=0}
++        local setup=pcall(function()
++            s.runner=(runnerFactory or NS.SelfTests.NewRunner)()
++            assert(type(s.runner)=="table" and type(s.runner.Step)=="function" and type(s.runner.Cancel)=="function","invalid runner")
++            s.total=s.runner.total
++            assert(NS.Core.Integer(s.total) and s.total<=512,"invalid runner total")
++            self.selftest=s
++            s.frame=env.CreateFrame("Frame")
++            assert(s.frame and type(s.frame.SetScript)=="function" and type(s.frame.Hide)=="function" and type(s.frame.Show)=="function","Frame capability missing")
++            self.selftestFrame=s.frame
++            s.frame:SetScript("OnUpdate",function()
++                if self.selftest~=s then return end
++                local worked=pcall(function()
++                    if not safeCombat() then finish(s,"combat/unknown safety; no automatic resume"); return end
++                    local before=readClock(s)
++                    local r=s.runner
++                    local from=identity(s)
++                    r:Step() -- exactly ONE unit; never drain/loop in a frame
++                    local after=readClock(s)
++                    local duration=after-before
++                    if not NS.Core.Finite(duration) then error("nonfinite unit duration",0) end
++                    local boundary=from.." -> "..identity(s)
++                    if not s.maxIdentity or duration>s.maxUnit then s.maxUnit=duration; s.maxIdentity=boundary end
++                    if duration>100 then
++                        if r.lastLine and r.lastLine:sub(1,5)=="FAIL " then pcall(printLine,r.lastLine) end
++                        finish(s,string.format("slow unit %.1fms >100ms; ",duration)..boundary); return
++                    end
++                    if r.lastLine then printLine(r.lastLine) end
++                    if r.status~="running" then finish(s); return end
++                    local count=r.passed+r.failed
++                    if count-s.progressCount>=10 or after-s.progressAt>=1000 then
++                        progress(s,"PROGRESS"); s.progressCount=count; s.progressAt=after
++                    end
++                end)
++                if not worked then finish(s,"scheduler/callback or clock failure; reload if function drift") end
++            end)
++            s.frame:Show()
++            printLine("Selftest STARTED: "..s.total.." cases; one safe unit/frame; /ca selftest cancel; slow-unit stop >100ms (not preemption).")
++            if s.runner.status~="running" then finish(s) end
++        end)
++        if not setup then
++            if self.selftest==s then finish(s,"frame/runner setup failure")
++            else
++                if s.runner and type(s.runner.Cancel)=="function" then pcall(s.runner.Cancel,s.runner,"setup failure") end
++                s.runner=nil; s.clock=nil
++                pcall(printLine,"Selftest INCOMPLETE: runner setup failure.")
++            end
++        end
++        return s.runner
+     end
+     function self:Login()
+         if self.collector then return end
+@@ -17,13 +138,19 @@
+         if why then self.collector.blockReason=why; self.collector.reason=why; printLine(why) end
+     end
+     function self:Run(message)
++        local action=(message or ""):match("^%s*selftest%s*(.-)%s*$")
++        -- Match the command token, not prefixes such as selftesting.
++        local token=(message or ""):match("^%s*(%S+)")
++        if token=="selftest" then
++            if action=="" then return startSelftest() end
++            if action=="cancel" then
++                if self.selftest then finish(self.selftest,"cancelled by user")
++                else printLine("No selftest running.") end
++                return
++            end
++            printLine("Usage: /ca selftest | /ca selftest cancel"); return
++        end
+         local command=(message or ""):match("^%s*(%S*)%s*$")
+-        if command=="selftest" then
+-            local result=NS.SelfTests.Run()
+-            for _,line in ipairs(result.lines) do printLine(line) end
+-            printLine(result.passed.." passed; "..result.failed.." failed (pure injected fixtures, not client API evidence)")
+-            return result
+-        end
+         if command=="knowledgecheck" then
+             local combat=NS.Collectors.Call(env,"InCombatLockdown")
+             if combat~=false then
+@@ -44,9 +171,10 @@
+         if command=="" then self.dashboard:Toggle()
+         elseif command=="scan" then
+             local _,why=self.collector:Scan(); printLine(why or self.collector.reason)
+-        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (isolated fixtures); /ca knowledgecheck (read-only provisional Inscription evidence, out of combat).") end
++        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (frame-stepped isolated fixtures, out of combat); /ca selftest cancel; /ca knowledgecheck (read-only provisional Inscription evidence, out of combat).") end
+     end
+     function self:Event(event,...)
++        if event=="PLAYER_REGEN_DISABLED" and self.selftest then finish(self.selftest,"entered combat; no automatic resume") end
+         if event=="PLAYER_LOGIN" then self:Login(); self.collector:Request("Login: open your own profession to refresh"); return end
+         if not self.collector then return end
+         if event=="ITEM_DATA_LOAD_RESULT" then self.collector:ItemResult(...); return end
+# docs/dashboard/README.md baselineSHA256=80e49eddff61ebb598d7321ea47cf963be001d10e611fdb8855ab71dfbb50bc2 targetSHA256=1026bde1bfb709dace442c0820f0d11d378972a5916cfe52f361516e975c8f6a
+--- K2/docs/dashboard/README.md
++++ K3/docs/dashboard/README.md
+@@ -1,6 +1,10 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++**Current selftest paused:** the user reported96/96 assertions PASS but an extended
++game lockup/execution-limit warning. Performance acceptance is CHANGES REQUIRED.
++Do **not** rerun that synchronous suite. K3 below is delivered for independent review,
++not yet approved for a user update/run. Warning attribution is unmeasured.
+ K2 adds narrowly scoped Midnight Inscription native-rank/shared-spent-reconciled
+ bars, subject to complete same-scan guards and review/user validation. This is NOT
+ verified future/all-rank cost proof. Registry support for eight crafting families is not runtime
+@@ -31,8 +35,9 @@
+ - `/ca scan` reads the currently visible, ready, own-player supported profession.
+   It never opens/switches professions. Closed, linked, guild, NPC, changing or
+   unready contexts preserve saved snapshots with a refresh explanation.
+-- `/ca selftest` runs isolated injected fixtures, not live collection or real DB
+-  mutations. Report exact passed/failed counts and errors; do not assume success.
++- `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
++  without Login/live collection/real DB mutations. Repeating it reports status, not
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3 review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -154,17 +159,52 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K2 native-rank bars (current; user only, after independent review)
++### K3 responsive selftest (current; user only AFTER independent review)
++
++The historical user **96 passed / 0 failed** is functional assertion evidence only:
++the accompanying extended lockup and69x execution-limit warning make safe performance
++**CHANGES REQUIRED**. The warning names BugGrabber but does not establish its cause.
++Do not disable it, suppress error handlers, change profiling CVars or rerun the old
++suite. The K2 production accounting and all saved data remain unchanged.
++
++1. **Wait for primary's independent K3 review.** Only after review/primary coordination,
++   fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
++   Already on K2: replace **only `CraftArmy/Commands.lua` and `CraftArmy/SelfTests.lua`**
++   with the reviewed K3 pair. Keep every other addon file, `CraftArmyDB`, diagnostics
++   and all SavedVariables. Same version0.2.0-mvp/Interface120105/schema1; no reset.
++2. Login/reload. The revised `/ca selftest` is asynchronous: STARTED reports the actual
++   total (**111 definitions**, not a promised pass). It executes at most one safe unit
++   per native frame; large stress operations/parameter variants have internal safe
++   boundaries. The game should remain interactive, but this is **not yet measured**.
++   Report actual COMPLETE/INCOMPLETE counts, elapsed wall/max-unit timing, case/unit/
++   label and warnings/errors, including whether the game stayed responsive.
++3. While running, repeat `/ca selftest` only for status or use **`/ca selftest cancel`**
++   to release work. Progress appears every10 finished cases or each second during
++   multi-unit work. Entering combat stops INCOMPLETE before further units; leaving
++   combat never resumes automatically. No clock/Frame capability means no start.
++4. A measured atomic unit **over100ms stops INCOMPLETE**, even if the last case passed.
++   It cannot interrupt an atomic operation already running; no hard latency guarantee
++   is claimed. Missing/invalid/backward clocks, unsafe function drift or callback
++   errors also stop. Share the case/unit/label/timing **once**; do not repeatedly rerun
++   or wait through freezing. Function-drift reports require reload, not manual repair.
++   Report failures/cancellation as incomplete evidence; preserve data and backups.
++5. Primary must record satisfactory **safe complete fixture execution and responsiveness**
++   before the K2 current four-bar/hover/unspent comparison resumes. Until then it stays
++   paused. Injected fixtures and fake-frame tests never establish target-client APIs,
++   actual frame scheduling/performance or all-rank costs. `/cad selftest` is separate,
++   unchanged and not requested again by this correction.
++
++### K2 native-rank bars (historical update; native checklist paused pending K3)
+ 
+ Version **0.2.0-mvp**, Interface **120105** and schema **1** stay unchanged. The prior
+ K1 user **66/66** and complete native report are baseline evidence only. K2 defines
+ **96 cases** (all66 byte-exact retained +30 K2 definitions, including9 review-correction
+-cases); expanded Lua/client checks are
+-**NOT RUN** until actually performed/supplied. Injected fixtures are not API proof.
+-
+-**Independent re-review pending:** the settled alias-safe correction is delivered,
+-not independently verified or accepted. Primary must finish corrected frozen review
+-and authorize the user retest before the following five-file update.
++cases). User96/96 assertions now PASS, but lockup/warning blocks performance acceptance.
++The historical five-file update/selftest instructions below are superseded by K3's
++two-file update/review gate; **do not repeat the old suite**. Injected fixtures are not API proof.
++
++K2 corrected static re-review passed; this does not clear the new responsiveness gate.
++The following records the previous update and deferred native comparison scope.
+ 
+ 1. After primary's independent K2 review, fully quit WoW and back up `WTF`, including
+    production and diagnostic SavedVariables. If already on K1, replace **only

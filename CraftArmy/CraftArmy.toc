@@ -1,0 +1,16 @@
+## Interface: 120105
+## Title: CraftArmy
+## Notes: Read-only crafting snapshots and compact dashboard
+## Version: 0.2.0-mvp
+## SavedVariables: CraftArmyDB
+Core.lua
+Storage.lua
+Data.lua
+Knowledge.lua
+Collectors.lua
+KnowledgeCheck.lua
+Details.lua
+ViewModel.lua
+Dashboard.lua
+SelfTests.lua
+Commands.lua

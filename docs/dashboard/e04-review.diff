@@ -1,0 +1,295 @@
+--- before/CraftArmy/Data.lua
++++ after/CraftArmy/Data.lua
+@@ -41,7 +41,14 @@
+     [2906]=Data.moxieCatalog.Alchemy, [2907]=Data.moxieCatalog.Blacksmithing,
+     [2910]=Data.moxieCatalog.Engineering, [2914]=Data.moxieCatalog.Jewelcrafting,
+     [2915]=Data.moxieCatalog.Leatherworking, [2918]=Data.moxieCatalog.Tailoring }
+-Data.enchants = { [8005]={category="Multicraft", provenance="T01 user ID + typed line; 70783"} }
++Data.enchants = {
++    [7977]={category="Resourcefulness", provenance="Engineering equipped diagnostic + user category 2026-11-10"},
++    [8005]={category="Multicraft", provenance="T01 user ID + typed line; 70783"},
++    [8035]={category="Ingenuity", provenance="User-supplied list 2026-11-10; not native-verified here"},
++    [8033]={category="Deftness", provenance="User-supplied list 2026-11-10; not native-verified here"},
++    [8003]={category="Finesse", provenance="User-supplied list 2026-11-10; not native-verified here"},
++    [7975]={category="Perception", provenance="User-supplied list 2026-11-10; not native-verified here"},
++}
+ -- Pinned ProfessionsCrafting.xml named Prof0/1ToolSlot and Gear0/1Slot.
+ -- Applied only to slots returned by GetProfessionSlots for this profession.
+ Data.slotRoles = { [20]="tool", [21]="accessory1", [22]="accessory2",
+@@ -52,6 +59,7 @@
+     ["Crafting Speed"]={"C", "Crafting Speed"},
+     Ingenuity={"I", "Ingenuity"}, Multicraft={"M", "Multicraft"},
+     Resourcefulness={"R", "Resourcefulness"},
++    Deftness={"D", "Deftness"}, Finesse={"F", "Finesse"}, Perception={"P", "Perception"},
+ }
+ Data.statNames = {
+     ITEM_MOD_MULTICRAFT_SHORT=Data.statCategories.Multicraft,
+--- before/CraftArmy/SelfTests.lua
++++ after/CraftArmy/SelfTests.lua
+@@ -838,7 +838,8 @@
+     local tool=NS.ViewModel.Tool({exists=true,stats={ITEM_MOD_MULTICRAFT_SHORT=152},enchant=enchant},{text="fixture"})
+     eq(tool.statsText,"Multicraft"); eq(tool.enchantText,"Multicraft")
+     assert(table.concat(tool.tooltip,"\n"):find("ID 8005; stat Multicraft; amount/rank unknown",1,true))
+-    local count=0; for id in pairs(NS.Data.enchants) do eq(id,8005); count=count+1 end; eq(count,1)
++    local expected={[7977]="Resourcefulness",[8005]="Multicraft",[8035]="Ingenuity",[8033]="Deftness",[8003]="Finesse",[7975]="Perception"}
++    local count=0; for id,entry in pairs(NS.Data.enchants) do assert(expected[id]); eq(entry.category,expected[id]); count=count+1 end; eq(count,6)
+ end)
+ case("R6 multiple full stats preserve values attribution and unknown states in hover",function()
+     local stats={ITEM_MOD_CRAFTING_SPEED_SHORT=11,ITEM_MOD_INGENUITY_SHORT=22,
+@@ -6714,6 +6715,203 @@
+ end
+ -- E03 END
+ 
++-- E04 BEGIN: exact supplied enchant IDs; all item/scan values below are synthetic.
++-- D/F/P rendering exercises labels only, NOT gathering support/equipped compatibility.
++do
++local D,V=NS.Data,NS.ViewModel
++local supplied={{7977,"Resourcefulness"},{8005,"Multicraft"},{8035,"Ingenuity"},
++    {8033,"Deftness"},{8003,"Finesse"},{7975,"Perception"}}
++local verifyRegistry=unchangedGraph(D)
++local function fixture(id)
++    local env,s=fixtureAPI()
++    s.guid="Player-E04-synthetic-engineer"; s.enchantID=id; s.positive=id~=0
++    s.info={professionID=2910,parentProfessionID=202,profession=8,isPrimaryProfession=true,
++        professionName="Engineering",expansionName="Synthetic E04",sourceCounter=1,
++        skillLevel=37,maxSkillLevel=100,skillModifier=6}
++    env.UnitGUID=function(unit) eq(unit,"player"); return s.guid end
++    env.UnitName=function(unit) eq(unit,"player"); return "Synthetic E04 engineer" end
++    env.GetProfessionInfo=function(index) eq(index,1); return "Engineering",0,100,100,0,0,202 end
++    local t,p=env.C_TradeSkillUI,env.C_ProfSpecs
++    t.GetBaseProfessionInfo=function() return {professionID=202} end
++    t.GetProfessionSlots=function(family) eq(family,8); return s.slots end
++    t.GetConcentrationCurrencyID=function(skill) eq(skill,2910); return 74001 end
++    env.C_CurrencyInfo.GetCurrencyInfo=function(currency)
++        assert(currency==74001 or currency==3259,"E04 own Engineering currencies only")
++        return {quantity=currency==3259 and 73 or 289,maxQuantity=currency==74001 and 1000 or 0}
++    end
++    p.GetConfigIDForSkillLine=function(skill) eq(skill,2910); return 74002 end
++    p.GetSpecTabIDsForSkillLine=function(skill) eq(skill,2910); return {} end
++    p.GetCurrencyInfoForSkillLine=function(skill) eq(skill,2910); return {numAvailable=9} end
++    env.C_Item.GetItemID=function(loc) return 94000+loc.slot end
++    env.C_Item.GetItemLink=function(loc)
++        if s.noLink then return nil end
++        return "item:"..(94000+loc.slot)..":"..(loc.slot==20 and s.enchantID or 0)..":0:0"
++    end
++    env.C_Item.GetItemStats=function() return {ITEM_MOD_RESOURCEFULNESS_SHORT=47} end
++    env.C_TooltipInfo.GetInventoryItem=function(unit,slot)
++        eq(unit,"player")
++        return {lines=slot==20 and s.positive and {{type=15,leftText="Synthetic E04 enchant",rightText="Synthetic detail"}} or {}}
++    end
++    return env,s,NS.Collectors.New(env,C.Open(nil))
++end
++local function active(c,s) return c.db.characters[s.guid].professions[2910].active end
++local function row(c,s,at)
++    local rows=V.Build(c.db,c.fresh,{professionFamily=8},at or s.at)
++    eq(#rows,1); eq(rows[1].guid,s.guid); eq(rows[1].id,2910); return rows[1]
++end
++local function noAmounts(enchant)
++    eq(enchant.amount,nil); eq(enchant.rank,nil); eq(enchant.quality,nil)
++end
++local function diagnostic(tool,id,category)
++    local text=table.concat(tool.tooltip,"\n")
++    assert(text:find("ID "..id.."; stat "..category.."; amount/rank unknown",1,true))
++    assert(text:find("Synthetic E04 enchant",1,true)); assert(text:find("Synthetic detail",1,true))
++    assert(text:find("Resourcefulness: 47 (observed total)",1,true))
++    assert(text:find("base/enchant attribution unknown",1,true))
++end
++case("E04 exact six enchant categories provenance and no inferred amounts ranks or extra IDs",function()
++    local expected={}; for _,spec in ipairs(supplied) do expected[spec[1]]=spec[2] end
++    local count=0
++    for id,entry in pairs(D.enchants) do
++        assert(expected[id]); eq(entry.category,expected[id]); noAmounts(entry)
++        local fields=0; for key in pairs(entry) do assert(key=="category" or key=="provenance"); fields=fields+1 end
++        eq(fields,2); count=count+1
++        if id==8005 then eq(entry.provenance,"T01 user ID + typed line; 70783")
++        elseif id==7977 then eq(entry.provenance,"Engineering equipped diagnostic + user category 2026-11-10")
++        else eq(entry.provenance,"User-supplied list 2026-11-10; not native-verified here") end
++    end
++    eq(count,6); eq(D.enchants[9999],nil); eq(D.enchants[7978],nil); verifyRegistry()
++end)
++case("E04 D F P full labels without new stat API keys or gathering identities",function()
++    local categories={["Crafting Speed"]="C",Ingenuity="I",Multicraft="M",Resourcefulness="R",
++        Deftness="D",Finesse="F",Perception="P"}
++    local count=0
++    for name,labels in pairs(D.statCategories) do
++        eq(labels[1],assert(categories[name])); eq(labels[2],name); eq(#labels,2); count=count+1
++    end
++    eq(count,7)
++    local keys={ITEM_MOD_CRAFTING_SPEED_SHORT="Crafting Speed",ITEM_MOD_INGENUITY_SHORT="Ingenuity",
++        ITEM_MOD_MULTICRAFT_SHORT="Multicraft",ITEM_MOD_RESOURCEFULNESS_SHORT="Resourcefulness"}
++    count=0; for key,labels in pairs(D.statNames) do eq(labels,D.statCategories[assert(keys[key])]); count=count+1 end
++    eq(count,4)
++    local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
++        [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription"}
++    count=0; for id,name in pairs(D.families) do eq(name,assert(families[id])); count=count+1 end; eq(count,8)
++    local skills={[2906]=true,[2907]=true,[2909]=true,[2910]=true,[2913]=true,[2914]=true,[2915]=true,[2918]=true}
++    count=0; for id in pairs(D.expansions) do assert(skills[id]); count=count+1 end; eq(count,8)
++    for _,family in ipairs({4,5,6}) do eq(D.Identity({professionID=75000+family,parentProfessionID=202,profession=family}),nil) end
++    verifyRegistry()
++end)
++for _,value in ipairs(supplied) do
++    local id,category=value[1],value[2]
++    case("E04 ready enchant "..id.." collector gear snapshot renders full "..category,function(checkpoint)
++        local _,s,c=fixture(id)
++        local enchant=NS.Collectors.Enchant("item:94020:"..id..":0",true,true)
++        eq(enchant.status,"observed"); eq(enchant.present,true); eq(enchant.id,id); eq(enchant.category,category); noAmounts(enchant)
++        local gear,status=c:Gear(20,"tool")
++        eq(status,"observed"); eq(gear.metadataReady,true); eq(gear.enchant.id,id); eq(gear.enchant.category,category)
++        noAmounts(gear.enchant); eq(C.ValidPayload("tool",gear,"observed"),true)
++        pause(checkpoint,"E04 commit ready synthetic gear "..id)
++        local ctx=assert(c:Context())
++        local g=assert(C.Apply(c.db,ctx.character,ctx.identity,{tool=C.Observation("observed",gear,100,"E04 synthetic gear")},100,"E04 fixture"))
++        eq(g.fields.tool.last.value.enchant.category,category); eq(g.fields.tool.last.value.enchant.id,id)
++        local r=row(c,s); eq(r.cells[I.Enchant],category); eq(r.cells[I.Stat],"Resourcefulness")
++        eq(r.enchantMissing,false); noAmounts(r.gear.tool.enchant); diagnostic(r.gear.tool,id,category)
++        eq(r.cells[I.Enchant]:find("47",1,true),nil); eq(r.cells[I.Stat]:find("47",1,true),nil)
++        eq(C.Open(c.db),c.db); verifyRegistry()
++    end)
++end
++case("E04 own ready Engineering scan saves 7977 Resourcefulness and normal row",function(checkpoint)
++    local _,s,c=fixture(7977); eq(c:Scan(),true)
++    local g=active(c,s); eq(g.identity.skillLineID,2910); eq(g.identity.parentID,202); eq(g.identity.profession,8)
++    local f=g.fields.tool; eq(f.attempt.status,"observed"); eq(f.last.observedAt,100)
++    eq(f.last.value.itemID,94020); eq(f.last.value.enchant.id,7977); eq(f.last.value.enchant.category,"Resourcefulness")
++    noAmounts(f.last.value.enchant)
++    local r=row(c,s); eq(r.profession,"Engineering"); eq(r.cells[I.Enchant],"Resourcefulness")
++    eq(r.cells[I.Stat],"Resourcefulness"); eq(r.gear.tool.state.fresh,true); eq(r.enchantMissing,false)
++    eq(r.skill.skillLevel,37); eq(r.moxie,73); eq(r.concentration,289); eq(r.unspent,9)
++    eq(g.fields.knowledgeRaw.attempt.status,"unsupported"); eq(g.fields.knowledgeRaw.last,nil)
++    diagnostic(r.gear.tool,7977,"Resourcefulness")
++    pause(checkpoint,"E04 repeated own Engineering scan")
++    s.at=111; eq(c:Scan(),true); eq(active(c,s).fields.tool.last.observedAt,111)
++    eq(row(c,s).cells[I.Enchant],"Resourcefulness"); verifyRegistry()
++end)
++case("E04 unknown positive absent missing unready and conflicting enchants stay distinct",function(checkpoint)
++    local unknown=NS.Collectors.Enchant("item:94020:9999:0",true,true)
++    eq(unknown.status,"observed"); eq(unknown.present,true); eq(unknown.id,9999); eq(unknown.category,nil); noAmounts(unknown)
++    local absent=NS.Collectors.Enchant("item:94020:0:0",false,true)
++    eq(absent.status,"observed"); eq(absent.present,false); eq(absent.id,0)
++    for _,spec in ipairs({{9999,"?",false},{0,"",true}}) do
++        pause(checkpoint,"E04 positive unknown versus absent scan")
++        local _,s,c=fixture(spec[1]); eq(c:Scan(),true)
++        local r=row(c,s); eq(r.cells[I.Enchant],spec[2]); eq(r.enchantMissing,spec[3])
++        eq(active(c,s).fields.tool.last.value.enchant.present,not spec[3])
++    end
++    for _,args in ipairs({{false,false,true},{"item:94020:",false,true},
++        {"item:94020:7977:0",true,false},{"item:94020:0:0",true,true}}) do
++        local enchant=NS.Collectors.Enchant(args[1],args[2],args[3])
++        eq(enchant.status,"unknown"); eq(enchant.present,nil); eq(enchant.id,nil); noAmounts(enchant)
++        eq(V.Tool({exists=true,metadataReady=true,enchant=enchant},{text="fixture"}).enchantText,"?")
++    end
++    for _,change in ipairs({function(_,s) s.noLink=true end,function(_,s) s.loading=true end,
++        function(_,s) s.enchantID=0; s.positive=true end}) do
++        pause(checkpoint,"E04 missing unready conflicting first scan")
++        local env,s,c=fixture(7977); change(env,s); eq(c:Scan(),true)
++        local r=row(c,s); eq(r.cells[I.Enchant],"?"); assert(r.enchantMissing~=true,"unknown is not confirmed missing")
++    end
++    eq(NS.Collectors.Enchant(nil,false,true).status,"unknown"); verifyRegistry()
++end)
++case("E04 Engineering enchant survives gear and same item metadata failures without fresh promotion",function(checkpoint)
++    for _,failure in ipairs({function(env) env.C_Item.GetItemStats=function() error("E04 synthetic gear failure") end end,
++        function(env) env.C_Item.GetItemQuality=function() return nil end end,
++        function(_,s) s.loading=true end}) do
++        pause(checkpoint,"E04 seed known Engineering enchant")
++        local env,s,c=fixture(7977); eq(c:Scan(),true)
++        local old=active(c,s).fields.tool.last; local verify=unchangedGraph(old)
++        pause(checkpoint,"E04 transient same item failure")
++        failure(env,s); s.at=123; eq(c:Scan(),true)
++        local f=active(c,s).fields.tool
++        assert(f.attempt.status~="observed"); eq(f.attempt.attemptedAt,123); eq(f.last.observedAt,100)
++        eq(f.last.value.itemID,94020); eq(f.last.value.enchant.id,7977); eq(f.last.value.enchant.category,"Resourcefulness")
++        local r=row(c,s); eq(r.cells[I.Enchant],"Resourcefulness"); eq(r.enchantMissing,false)
++        eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.stale,true); eq(r.gear.tool.state.observedAt,100)
++        noAmounts(r.gear.tool.enchant); diagnostic(r.gear.tool,7977,"Resourcefulness"); verify(); verifyRegistry()
++    end
++end)
++case("E04 reopened Engineering dashboard uses saved enchant with no API collection or freshness mutation",function(checkpoint)
++    local env,s,c=fixture(7977); eq(c:Scan(),true)
++    pause(checkpoint,"E04 reopen Engineering saved DB")
++    local saved=assert(C.Copy(c.db)); eq(C.Open(saved),saved); s.at=145
++    local calls=0; local function forbidden() calls=calls+1; error("E04 offline API forbidden") end
++    for _,api in ipairs({env.C_TradeSkillUI,env.C_ProfSpecs,env.C_Traits,env.C_Item,env.C_CurrencyInfo,env.C_TooltipInfo}) do
++        for key,value in pairs(api) do if type(value)=="function" then api[key]=forbidden end end
++    end
++    env.UnitGUID=forbidden; env.GetProfessions=forbidden
++    local reopened=NS.Collectors.New(env,saved)
++    reopened.Scan=forbidden; reopened.Context=forbidden; reopened.Gear=forbidden; reopened.Knowledge=forbidden
++    local verify=unchangedGraph({saved,reopened.fresh})
++    mockWidgets(env); local ui=NS.Dashboard.New(env,reopened); ui:Toggle(); eq(#ui.rows,1)
++    local r=ui.rows[1]; eq(r.profession,"Engineering"); eq(r.id,2910); eq(r.cells[I.Enchant],"Resourcefulness")
++    eq(r.gear.tool.state.fresh,false); eq(r.gear.tool.state.observedAt,100); eq(r.lastUpdated,"45s")
++    diagnostic(r.gear.tool,7977,"Resourcefulness"); noAmounts(r.gear.tool.enchant)
++    ui:Refresh(); ui:Render(); eq(calls,0); eq(next(reopened.fresh),nil); verify(); verifyRegistry()
++end)
++case("E04 saved unmapped category stays unknown until ordinary Engineering rescan not cached migration",function(checkpoint)
++    local env,s,c=fixture(7977); eq(c:Scan(),true)
++    -- Reconstruct the pre-E04 saved shape in this private DB only, never Data.
++    local saved=assert(C.Copy(c.db)); local enchant=saved.characters[s.guid].professions[2910].active.fields.tool.last.value.enchant
++    enchant.category=nil; eq(C.Open(saved),saved)
++    local verify=unchangedGraph(saved); local cached=NS.Collectors.New(env,saved)
++    local r=row(cached,s); eq(r.cells[I.Enchant],"?"); eq(r.enchantMissing,false); eq(enchant.id,7977); verify()
++    pause(checkpoint,"E04 normal own scan updates old saved category")
++    s.at=152; eq(cached:Scan(),true)
++    eq(active(cached,s).fields.tool.last.value.enchant.category,"Resourcefulness")
++    eq(active(cached,s).fields.tool.last.observedAt,152); eq(row(cached,s).cells[I.Enchant],"Resourcefulness")
++    eq(enchant.category,nil); verifyRegistry()
++end)
++end
++-- E04 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+--- before/docs/dashboard/README.md
++++ after/docs/dashboard/README.md
+@@ -1,6 +1,50 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++
++## E04 — supplied enchant categories; Engineering display check pending review
++
++**Implementation/local fixtures only; primary actual-baseline comparison and independent
++review are pending. Do not update for E04 yet.** This section supersedes historical
++one-ID/discovery-required descriptions and the E03 Resourcefulness issue below without
++rewriting their evidence. Engineering's saved diagnostic reports positive enchant7977;
++the user identifies Resourcefulness. Six exact supplied IDs are now mapped:
++
++| ID | Full category | Evidence here |
++| --- | --- | --- |
++| 7977 | Resourcefulness | Engineering equipped diagnostic + user category, 2026-11-10 |
++| 8005 | Multicraft | Original T01 native ID/typed line; provenance unchanged |
++| 8035 | Ingenuity | User-supplied list, 2026-11-10; not native-verified here |
++| 8033 | Deftness | User-supplied list, 2026-11-10; not native-verified here |
++| 8003 | Finesse | User-supplied list, 2026-11-10; not native-verified here |
++| 7975 | Perception | User-supplied list, 2026-11-10; not native-verified here |
++
++Only production `Data.lua` changes: these entries plus approved Deftness/Finesse/Perception
++category labels (D/F/P). All four verified stat API keys, eight crafting identities,
++Moxie mappings, collectors, saved schema, Knowledge and Details are unchanged. D/F/P
++labels do **not** enable gathering scans or establish equipped-item compatibility.
++Known IDs establish category only, never amounts/ranks or other quality variants.
++Full category names appear without amounts in the main table; observed tool-stat
++amounts and enchant IDs/typed lines remain in diagnostic Shift-hover. Unknown positive
++IDs/unready/conflicting data show `?`, not confirmed absence; only confirmed absent
++enchants are blank. Coherent saved values/time survive transient reads where available.
++
++Local fixtures: **264/264** (251 retained, only obsolete final R6 enchant allowlist/count
++adapted,13 new E04); unchanged **744 K6 /565 K7**. These are synthetic correctness
++checks, not native API, gathering or display acceptance. Exact validation/freeze evidence
++is appended in [evidence](evidence.md). Engineering7977's **new dashboard display remains
++native-pending**; the other four supplied IDs remain unverified here.
++
++After primary comparison/review, the eventual E03-based update is only `Data.lua` +
++`SelfTests.lua`, preserving saved data/backups. The first focused user check is one
++ordinary own ready Engineering `/ca scan`, then compare the Enchant cell's full
++**Resourcefulness** name and report errors/warnings/responsiveness. This is future
++guidance, not authorization to install now. A pre-E04 cached unknown category updates
++on that normal scan; offline/cached viewing or hover does not migrate data or read APIs.
++Verify the other supplied categories as encountered in ordinary onboarding, not new
++ID-discovery rounds. Do not repeat accepted skill/Moxie/concentration/cache/reload
++checks, full native selftest, or Details refresh. Full native selftest remains
++**INCOMPLETE87/149**; gathering/Knowledge capture/Details improvements stay separate.
+ 
+ ## E03 — six-profession skill/Moxie/concentration and reload confirmed
+ 

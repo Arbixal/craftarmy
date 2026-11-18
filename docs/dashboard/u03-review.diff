@@ -1,0 +1,1578 @@
+# Primary exact pre-U03 to delivered U03 comparison. No Git/staged scope; preserved workspace bytes.
+# CraftArmy/Core.lua baseSHA256=63152f75360ee7f035e4c903557675c3ccd8a4903e942af64f1af2193119f7b4 targetSHA256=991084ad0c48e30e9d0e51a3b3a6778c59077f53bdd2805f12908026ce4dcde1
+--- pre-U03/CraftArmy/Core.lua
++++ U03/CraftArmy/Core.lua
+@@ -497,7 +497,47 @@
+     end
+     return visit(v.root) and count==#v.paths
+ end
++-- U03: optional, independently timed coherent client-description snapshot.
++local function professionDetails(v)
++    local function name(x)
++        return type(x)=="string" and #x>=1 and #x<=256 and x:match("%S")~=nil and not x:find("[%c|]")
++    end
++    if type(v)~="table" or not nativeID(v.version) or v.version~=1 or not nativeID(v.skillLineID) or v.skillLineID~=2913 or not nativeID(v.configID) or
++        not Core.Integer(v.sourceScanAt) then return false end
++    local trees,paths,perks={}, {}, {}
++    local pathCount,perkCount,bytes=0,0,0
++    local function description(x,required)
++        if type(x)~="string" or #x>4096 or (required and not x:match("%S")) then return false end
++        bytes=bytes+#x; return bytes<=32768
++    end
++    return array(v.trees,8,function(t)
++        if type(t)~="table" or not nativeID(t.id) or trees[t.id] or not optional(t.name,name) or
++            not nativeID(t.root) or not nativeInteger(t.purchased) or not nativeID(t.capacity) or
++            t.purchased>t.capacity then return false end
++        trees[t.id]=true
++        local sum,cap,root=0,0,false
++        if not array(t.paths,64,function(p)
++            pathCount=pathCount+1
++            if pathCount>64 or type(p)~="table" or not nativeID(p.id) or paths[p.id] or
++                not optional(p.name,name) or not nativeInteger(p.purchased) or not nativeID(p.capacity) or
++                p.purchased>p.capacity or not boolean(p.locked) or (p.locked and p.purchased~=0) or
++                not description(p.description,false) then return false end
++            paths[p.id]=true; root=root or p.id==t.root
++            sum=sum+p.purchased; cap=cap+p.capacity
++            return array(p.perks,32,function(k)
++                perkCount=perkCount+1
++                if perkCount>512 or type(k)~="table" or not nativeID(k.id) or perks[k.id] or
++                    not nativeInteger(k.rank) or k.rank>p.capacity or not nativeInteger(k.state) or (k.state~=0 and k.state~=2) or
++                    not boolean(k.isMajorPerk) or not description(k.description,true) or
++                    (k.state==2 and (p.locked or k.rank>p.purchased)) then return false end
++                perks[k.id]=true; return true
++            end)
++        end) then return false end
++        return root and sum==t.purchased and cap==t.capacity
++    end) and #v.trees>0
++end
+ local validators={
++    professionDetails=professionDetails,
+     skill=function(v)
+         return type(v)=="table" and Core.Integer(v.skillLevel) and Core.Integer(v.maxSkillLevel) and finite(v.skillModifier)
+     end,
+@@ -550,6 +590,7 @@
+         local v=f.last and f.last.value
+         if type(v)=="table" and (v.policy==NATIVE or v.accountingPolicy==NATIVE) and not nativeScope(g.identity) then return false end
+     end
++    if g.fields.professionDetails~=nil and not nativeScope(g.identity) then return false end
+     return true
+ end
+ function Core.Open(db)
+# CraftArmy/Details.lua baseSHA256=NEW targetSHA256=77a8da07a48ba4dc8a07fe9911dfb6e34d62f83fbe99b3a977833f8c065c244a
+--- pre-U03/CraftArmy/Details.lua
++++ U03/CraftArmy/Details.lua
+@@ -0,0 +1,488 @@
++local _, NS = ...
++local Details, C = {}, NS.Core
++NS.Details = Details
++local POLICY="native-rank-reconciled-v1"
++local function integer(v,low) return C.Integer(v,low or 0) and v<=2147483647 end
++local function plain(v) return type(v)=="table" and getmetatable(v)==nil end
++local function native(i)
++    return plain(i) and integer(i.skillLineID,1) and integer(i.parentID,1) and integer(i.profession,1) and
++        integer(i.expansionID,1) and i.skillLineID==2913 and i.parentID==773 and i.profession==13 and i.expansionID==11
++end
++-- Private lookup only: callers either just validated this DB or hold immutable
++-- selected-source ownership. Never use this as a public saved-data validation gate.
++local function activeLookup(db,s)
++    if not plain(db) or not C.Integer(db.schema,1) or db.schema~=1 or not plain(db.characters) then return nil end
++    local c=db.characters[s.guid]
++    local p=plain(c) and plain(c.professions) and c.professions[s.id]
++    local g=plain(p) and p.active
++    if not plain(g) or not integer(g.generation,1) or g.generation~=s.generation or
++        not plain(g.fields) or not native(g.identity) then return nil end
++    return g,c,p
++end
++local function value(g,key,at)
++    local f=g.fields[key]; local l=f and f.last
++    if not l or l.status~="observed" or f.attempt.status~="observed" or
++        (at~=nil and l.observedAt~=at) then return nil end
++    return l.value,l
++end
++local function selected(db,s)
++    if not plain(s) or type(s.guid)~="string" or not integer(s.id,1) or not integer(s.generation,1) or
++        type(s.archived)~="boolean" or not db or not C.Open(db) then return nil end
++    local c=db.characters[s.guid]; local p=c and c.professions[s.id]
++    if not p then return nil end
++    if not s.archived then return p.active and p.active.generation==s.generation and p.active or nil end
++    for _,g in ipairs(p.archives) do if g.generation==s.generation then return g end end
++end
++
++-- All API reads are private, guarded on both sides. Raw errors never escape.
++function Details.NewCaptureJob(env,collector,scope)
++    local job={status="running",steps=0,phase="metadata",progress="Preparing details"}
++    local db,source,ctx,serial,revision,at,build,report,descriptors
++    local characters,characterRecord,professionRecord,lastTime
++    local pathIndex,perkIndex,verifyIndex,totalPerks,textBytes=1,1,1,0,0
++    local perkIDs={}
++    local busy=false
++    local function stop(status,reason)
++        job.status=status; job.reason=reason
++        db=nil; source=nil; ctx=nil; report=nil; descriptors=nil
++        characters=nil; characterRecord=nil; professionRecord=nil; perkIDs=nil
++        return job
++    end
++    function job:Cancel()
++        if self.status=="running" then stop("cancelled","Details capture cancelled; saved report retained.") end
++        return self
++    end
++    local function cheap()
++        if job.status~="running" or collector.db~=db or not C.Integer(collector.serial) or
++            not C.Integer(collector.revision) or collector.serial~=serial or collector.revision~=revision then return false end
++        local g,c,p=activeLookup(db,scope)
++        return g==source and c==characterRecord and p==professionRecord and db.characters==characters and
++            C.Integer(g.scannedAt) and g.scannedAt==at
++    end
++    local function guard()
++        if not cheap() then return false end
++        local current=collector:Context()
++        if not cheap() or not current or current.staged~=false or not native(current.identity) or
++            not integer(current.config,1) or not integer(current.sourceCounter) or
++            current.character.guid~=scope.guid or current.identity.skillLineID~=scope.id or
++            current.identity.expansionID~=ctx.identity.expansionID or not collector:Same(ctx,current) or
++            current.config~=report.configID then return false end
++        local now=collector:Now()
++        if not cheap() or not C.Integer(now) or now<lastTime then return false end
++        lastTime=now
++        return true
++    end
++    local function read(path,...)
++        if not guard() then error("discard",0) end
++        local fn=NS.Collectors.Resolve(env,path)
++        if type(fn)~="function" then error("data",0) end
++        local ok,result=pcall(fn,...)
++        if not guard() then error("discard",0) end
++        if not ok or result==nil then error("data",0) end
++        return result
++    end
++    local function nodeMatches(d,n)
++        if not plain(n) then return false end
++        for key,v in pairs(d.node) do
++            if key=="activeEntry" then
++                if not plain(n.activeEntry) or not integer(n.activeEntry.entryID,1) or not integer(n.activeEntry.rank) or
++                    n.activeEntry.entryID~=v.entryID or n.activeEntry.rank~=v.rank then return false end
++            elseif key=="isAvailable" then
++                if type(n[key])~="boolean" or n[key]~=v then return false end
++            elseif not integer(n[key],key=="ID" and 1 or 0) or n[key]~=v then return false end
++        end
++        return true
++    end
++    local function matches(d)
++        return nodeMatches(d,read("C_Traits.GetNodeInfo",report.configID,d.path.id)) and cheap()
++    end
++    local function description(v,required)
++        if type(v)~="string" or #v>4096 or (required and not v:match("%S")) then error("data",0) end
++        textBytes=textBytes+#v
++        if textBytes>32768 then error("data",0) end
++        return v
++    end
++    local function commit(failed)
++        if not failed and (not C.ValidPayload("professionDetails",report,"observed") or not C.Copy(report)) then
++            return stop("failed","Invalid details payload; saved report retained.")
++        end
++        if not guard() then return stop("discarded","Context/source changed; details discarded.") end
++        -- Amendment: compact final fingerprint in THIS commit frame. Context only
++        -- brackets the batch; no Copy/Open/perk/entry reads between its node pcalls.
++        local fn=NS.Collectors.Resolve(env,"C_Traits.GetNodeInfo")
++        if type(fn)~="function" then return stop("failed","Final point check unavailable; saved report retained.") end
++        for _,d in ipairs(descriptors) do
++            if not cheap() then return stop("discarded","Source changed; details discarded.") end
++            local ok,n=pcall(fn,report.configID,d.path.id)
++            if not cheap() or not ok or not nodeMatches(d,n) or not cheap() then
++                return stop("discarded","Final point check failed; saved report retained.")
++            end
++        end
++        if not guard() then return stop("discarded","Context/source changed; details discarded.") end
++        -- No Context or changed callback inside this atomic writer. Core owns preflight.
++        local g=C.Apply(db,ctx.character,ctx.identity,{professionDetails=C.Observation(
++            failed and "unknown" or "observed",not failed and report or nil,lastTime,"C_ProfSpecs details",
++            failed and "Details unavailable; prior coherent report retained." or nil)},at,build)
++        if not g then return stop("failed","Details commit rejected; saved data unchanged.") end
++        local key=scope.guid..":"..scope.id
++        local fresh=collector.fresh[key]
++        if not fresh or fresh.generation~=g.generation then fresh={generation=g.generation,fields={}}; collector.fresh[key]=fresh end
++        fresh.fields.professionDetails=not failed and true or nil
++        job.committed=true
++        return stop(failed and "failed" or "complete",failed and
++            "Details unavailable; saved report retained." or "Details refreshed; recipe learning not checked.")
++    end
++    local function unit()
++        if job.phase=="commit" then return commit(job.dataFailed) end
++        if not guard() then return stop("discarded","Context/source changed; details discarded.") end
++        if job.phase=="metadata" then
++            local d=descriptors[pathIndex]
++            if not matches(d) then return stop("discarded","Native points changed; run a normal scan first.") end
++            d.path.description=description(read("C_ProfSpecs.GetDescriptionForPath",d.path.id),false)
++            local list=read("C_ProfSpecs.GetPerksForPath",d.path.id)
++            if not plain(list) then error("data",0) end
++            local count,max,seen=0,0,{}
++            for key in pairs(list) do
++                count=count+1
++                if count>32 or not integer(key,1) or key>32 then error("data",0) end
++                max=math.max(max,key)
++            end
++            if count~=max then error("data",0) end
++            d.perks={}
++            for i=1,count do
++                local k=rawget(list,i)
++                if not plain(k) or not integer(k.perkID,1) or type(k.isMajorPerk)~="boolean" or seen[k.perkID] or perkIDs[k.perkID] then error("data",0) end
++                seen[k.perkID]=true; perkIDs[k.perkID]=true
++                totalPerks=totalPerks+1; if totalPerks>512 then error("data",0) end
++                d.perks[i]={id=k.perkID,isMajorPerk=k.isMajorPerk}
++            end
++            if count>0 then job.phase="perk" else pathIndex=pathIndex+1 end
++        elseif job.phase=="perk" then
++            local d=descriptors[pathIndex]; local k=d.perks[perkIndex]
++            k.rank=read("C_ProfSpecs.GetUnlockRankForPerk",k.id)
++            k.state=read("C_ProfSpecs.GetStateForPerk",k.id,report.configID)
++            k.description=description(read("C_ProfSpecs.GetDescriptionForPerk",k.id),true)
++            if not integer(k.rank) or k.rank>d.path.capacity or not integer(k.state) or (k.state~=0 and k.state~=2) or
++                (k.state==2 and (d.path.locked or k.rank>d.path.purchased)) then error("data",0) end
++            d.path.perks[#d.path.perks+1]=k; perkIndex=perkIndex+1
++            if perkIndex>#d.perks then perkIndex=1; pathIndex=pathIndex+1; job.phase="metadata" end
++        elseif job.phase=="verify" then
++            if not matches(descriptors[verifyIndex]) then return stop("discarded","Native points changed; details discarded.") end
++            verifyIndex=verifyIndex+1
++            if verifyIndex>#descriptors then job.phase="commit" end
++        end
++        if pathIndex>#descriptors and job.phase=="metadata" then job.phase="verify" end
++        if not guard() then return stop("discarded","Context/source changed; details discarded.") end
++        job.progress="Details: "..job.phase.." (unit "..job.steps..")"
++    end
++    function job:Step()
++        if self.status~="running" then return self end
++        if busy then return stop("discarded","Reentrant details capture discarded.") end
++        if self.steps>=10000 then return stop("failed","Details step limit; saved report retained.") end
++        busy=true; self.steps=self.steps+1
++        local committing=self.phase=="commit"
++        local ok,why=pcall(unit)
++        busy=false
++        if not ok and self.status=="running" then
++            local safe,valid=pcall(guard)
++            if not committing and why=="data" and safe and valid then
++                self.dataFailed=true; self.phase="commit"; self.progress="Details unavailable; retaining saved report"
++            else stop("discarded","Details capture interrupted; saved report retained.") end
++        end
++        return self
++    end
++    local ok=pcall(function()
++        if not plain(scope) or scope.archived~=false or scope.id~=2913 then error("scope") end
++        scope={guid=scope.guid,id=scope.id,generation=scope.generation,archived=false}
++        db=collector.db; source=selected(db,scope)
++        if not source or not native(source.identity) then error("scope") end
++        characters=db.characters
++        local g; g,characterRecord,professionRecord=activeLookup(db,scope)
++        if g~=source then error("scope") end
++        at=source.scannedAt; ctx=collector:Context(); serial=collector.serial; revision=collector.revision
++        if not ctx or not native(ctx.identity) or ctx.character.guid~=scope.guid or ctx.staged~=false or not integer(ctx.config,1) or
++            not integer(ctx.sourceCounter) or not C.Integer(serial) or not C.Integer(revision) then error("context") end
++        local prior=source.fields.professionDetails
++        lastTime=math.max(at,prior and prior.last and prior.last.observedAt or at)
++        local raw=value(source,"knowledgeRaw",at); local index=value(source,"knowledgeIndex",at)
++        if not raw or raw.policy~=POLICY or raw.nativeComplete~=true or raw.tabsComplete~=true or raw.stagedStart~=false or
++            raw.stagedEnd~=false or raw.stable~=true or raw.configID~=ctx.config or raw.sourceCounter~=ctx.sourceCounter or
++            not index or #index==0 or #raw.tabs~=#index then error("source") end
++        report={version=1,skillLineID=2913,configID=ctx.config,sourceScanAt=at,trees={}}
++        descriptors={}; local seen={}
++        for i,t in ipairs(index) do
++            local tree,last=value(source,"tree:"..t.id,at)
++            if not tree or tree.accountingPolicy~=POLICY or tree.id~=t.id or tree.root~=t.root or
++                raw.tabs[i].id~=t.id or raw.tabs[i].root~=tree.root or not native(raw.identity) then error("source") end
++            build=last.build
++            local out={id=tree.id,name=tree.name,root=tree.root,purchased=tree.purchased,capacity=tree.capacity,paths={}}
++            report.trees[#report.trees+1]=out
++            for _,p in ipairs(tree.paths) do
++                if #descriptors>=64 or seen[p.id] then error("source") end
++                seen[p.id]=true
++                local path={id=p.id,name=p.name,purchased=p.purchased,capacity=p.capacity,locked=p.locked,perks={}}
++                local node={}
++                for _,key in ipairs({"ID","type","flags","isAvailable","currentRank","activeRank","ranksPurchased","ranksIncreased","maxRanks","totalMaxRanks"}) do node[key]=p.node[key] end
++                node.activeEntry={entryID=p.node.activeEntry.entryID,rank=p.node.activeEntry.rank}
++                local rp=raw.tabs[i].paths[p.id]
++                if not rp or not nodeMatches({node=node},rp.node) then error("source") end
++                out.paths[#out.paths+1]=path; descriptors[#descriptors+1]={path=path,node=node}
++            end
++        end
++        if #descriptors==0 or not guard() then error("context") end
++    end)
++    if not ok then stop("blocked","Open your own ready unstaged Midnight Inscription and run a complete normal scan first.") end
++    return job
++end
++
++-- Presentation only. Never changes the persisted client strings or the dashboard's
++-- existing tooltip cleaner. Unknown tokens become literal escaped pipes.
++function Details.Plain(text)
++    local raw=tostring(text or "")
++    local tokens,stack,pos={}, {},1
++    local function token(text,kind)
++        local t={text=text,kind=kind}; tokens[#tokens+1]=t; return t
++    end
++    while pos<=#raw do
++        local pipe=raw:find("|",pos,true)
++        if not pipe then token(raw:sub(pos),"text"); break end
++        token(raw:sub(pos,pipe-1),"text")
++        local code=raw:sub(pipe,pipe+1)
++        local color=raw:sub(pipe,pipe+9):match("^|c%x%x%x%x%x%x%x%x$")
++        local close=(code=="|H" or code=="|T" or code=="|A") and raw:find("|",pipe+2,true)
++        local body=close and raw:sub(pipe+2,close-1)
++        local link=code=="|H" and close and raw:sub(close,close+1)=="|h" and body~="" and not body:find("[\r\n]")
++        local icon=close and body and not body:find("[\r\n]") and
++            ((code=="|T" and body:match("^[^%s:]") and raw:sub(close,close+1)=="|t") or
++             (code=="|A" and body:match("^:[^%s:]") and raw:sub(close,close+1)=="|a"))
++        if code=="||" then token("||","text"); pos=pipe+2
++        elseif color or link then
++            local last=color and pipe+9 or close+1
++            local t=token(raw:sub(pipe,last),color and "color" or "link")
++            if #stack<16 then stack[#stack+1]=t end
++            pos=last+1
++        elseif code=="|r" or code=="|h" then
++            local t=token(code,"markup"); local open=stack[#stack]
++            if open and open.kind==(code=="|r" and "color" or "link") then
++                open.remove=true; t.remove=true; stack[#stack]=nil
++            end
++            pos=pipe+2
++        elseif icon then token("","text"); pos=close+2
++        else
++            token("||","text"); pos=pipe+1
++        end
++    end
++    local out={}
++    for _,t in ipairs(tokens) do
++        if not t.remove then out[#out+1]=t.kind=="text" and t.text or (t.text:gsub("|","||")) end
++    end
++    return table.concat(out)
++end
++
++-- Resolve a stable scope exactly once per normal refresh, never per capture frame.
++function Details.Model(collector,scope)
++    local g=selected(collector.db,scope)
++    if not g then return {status="Snapshot unavailable or generation removed.",branches={}} end
++    local f=g.fields.professionDetails; local last=f and f.last
++    local report=last and last.status=="observed" and last.value
++    local session=collector.fresh[scope.guid..":"..scope.id]
++    local fresh=not scope.archived and session and session.generation==g.generation and
++        session.fields.professionDetails==true and f and f.attempt.status=="observed" and
++        report and report.sourceScanAt==g.scannedAt
++    local status=scope.archived and "Archived saved details" or (fresh and "Fresh details" or "Saved / stale details — not current")
++    if not native(g.identity) then status="Details unavailable for this profession (read-only)." end
++    if last then
++        local ok,now=pcall(collector.Now,collector)
++        local age="age unknown"
++        if ok and C.Integer(now) and now>=last.observedAt then
++            local seconds=now-last.observedAt
++            if seconds<60 then age=seconds.."s ago"
++            elseif seconds<3600 then age=math.floor(seconds/60).."m ago"
++            elseif seconds<86400 then age=math.floor(seconds/3600).."h ago"
++            else age=math.floor(seconds/86400).."d ago" end
++        end
++        status=status.."; observed "..age.." (at "..tostring(last.observedAt)..")"
++    end
++    local branches={}
++    local trees=report and report.trees
++    if not trees then
++        trees={}
++        local index=value(g,"knowledgeIndex") or (g.fields.knowledgeIndex and g.fields.knowledgeIndex.last and g.fields.knowledgeIndex.last.value) or {}
++        for _,t in ipairs(index) do
++            local tf=g.fields["tree:"..t.id]; local tv=tf and tf.last and tf.last.value
++            if tv then trees[#trees+1]=tv end
++        end
++        status=status.."; perks not observed."
++    end
++    for _,t in ipairs(trees) do
++        for _,p in ipairs(t.paths) do
++            local path={purchased=p.purchased,locked=p.locked,description=report and p.description,perks={}}
++            if report then
++                for _,k in ipairs(p.perks) do
++                    path.perks[#path.perks+1]={rank=k.rank,state=k.state,description=k.description}
++                end
++            end
++            branches[#branches+1]={tree=Details.Plain((t.name or "Unknown tree")..": "..t.purchased.."/"..t.capacity),
++                title=Details.Plain((p.name or "Unknown branch")..": "..p.purchased.."/"..p.capacity),
++                path=path,observed=report~=nil}
++        end
++    end
++    return {status=status,branches=branches,supported=native(g.identity),archived=scope.archived}
++end
++
++-- Only the selected branch is formatted into a scroll body. Model descriptors own
++-- their scalars/strings, never exposing a saved table to callers or later navigation.
++function Details.Branch(model,index)
++    local branch=model.branches[index]
++    if not branch then return nil end
++    local p=branch.path
++    local lines={}
++    if branch.observed then
++        lines[#lines+1]="Client per-point rule (not computed gained totals):"
++        lines[#lines+1]=p.description~="" and p.description or "No per-point rule supplied by the client."
++        if p.locked then lines[#lines+1]="Locked — not earned from investment."
++        elseif p.purchased==0 then lines[#lines+1]="0 invested — this rule is not a flat earned gain." end
++        lines[#lines+1]="\nEarned milestones:"
++        local count=0
++        for _,k in ipairs(p.perks) do
++            if k.state==2 then
++                count=count+1; lines[#lines+1]="Required rank "..k.rank..":\n"..k.description
++            end
++        end
++        if count==0 then lines[#lines+1]="None earned in this fully observed report." end
++    else lines[#lines+1]="Perks not observed. Open your own ready unstaged Midnight Inscription, run a normal scan, then choose Refresh details." end
++    return {tree=branch.tree,title=branch.title,body=Details.Plain(table.concat(lines,"\n\n"))}
++end
++
++function Details.NewView(env,collector)
++    local self={index=1}
++    local function combat()
++        local ok,v=pcall(function() return env.InCombatLockdown() end)
++        return not ok or v~=false
++    end
++    function self:Retire()
++        if self.job then self.job:Cancel() end
++        self.job=nil
++        if self.driver then self.driver:SetScript("OnUpdate",nil) end
++    end
++    function self:Close()
++        self:Retire()
++        if self.frame then self.frame:Hide() end
++    end
++    function self:Render()
++        local model=self.model; if not self.frame or not model then return end
++        self.index=math.max(1,math.min(self.index,math.max(1,#model.branches)))
++        local branch=Details.Branch(model,self.index)
++        self.tree:SetText(branch and branch.tree or "No known branch investment")
++        self.title:SetText(branch and branch.title or "Details")
++        self.position:SetText((#model.branches==0 and 0 or self.index).." / "..#model.branches)
++        self.status:SetText(Details.Plain(model.status))
++        -- Full names also live inside the wrapping scroll body, never clipped out
++        -- of reach by unusually long localized header labels.
++        self.bodyText=branch and (branch.tree.."\n"..branch.title.."\n\n"..branch.body) or
++            Details.Plain(model.supported==false and "Details unavailable for this profession (read-only)." or
++                "Perks not observed. Refresh details after a complete normal Inscription scan.")
++        local top=32
++        for _,label in ipairs({self.status,self.tree,self.title}) do
++            local h=42
++            if type(label.GetStringHeight)=="function" then
++                local ok,n=pcall(label.GetStringHeight,label)
++                if ok and C.Finite(n) and n>0 then h=math.min(80,math.max(14,n)) end
++            end
++            if label==self.status then h=math.max(42,h) end
++            label:SetHeight(h)
++            label:ClearAllPoints(); label:SetPoint("TOPLEFT",18,-top); top=top+h+4
++        end
++        self.position:ClearAllPoints(); self.position:SetPoint("TOPLEFT",660,-top)
++        top=top+24
++        self.scroll:ClearAllPoints(); self.scroll:SetPoint("TOPLEFT",18,-top); self.scroll:SetSize(716,math.max(140,453-top))
++        self.body:SetText(self.bodyText); self.body:ClearFocus(); self.scroll:SetVerticalScroll(0)
++        self.previous:SetEnabled(self.index>1); self.next:SetEnabled(self.index<#model.branches)
++        self.refresh:SetEnabled(model.supported==true and not model.archived)
++    end
++    function self:Refresh()
++        if not self.scope or not self.frame or not self.frame:IsShown() then return end
++        if self.job and self.job.status=="running" then return end
++        self.model=Details.Model(collector,self.scope)
++        self:Render()
++    end
++    function self:Start()
++        self:Retire()
++        if combat() or not self.scope then return end
++        local job=Details.NewCaptureJob(env,collector,self.scope); self.job=job
++        self.status:SetText(Details.Plain(job.reason or job.progress))
++        if job.status~="running" then self.job=nil; return end
++        self.driver:SetScript("OnUpdate",function()
++            -- Identity check also retires callbacks retained by an older frame/job.
++            if self.job~=job then return end
++            if combat() or not self.frame:IsShown() then
++                self:Retire(); self:Refresh()
++                self.status:SetText("Details capture cancelled; showing saved report. "..Details.Plain(self.model.status))
++                return
++            end
++            job:Step()
++            if self.job~=job then return end
++            if job.status=="running" then self.status:SetText(Details.Plain(job.progress)); return end
++            self.job=nil; self.driver:SetScript("OnUpdate",nil)
++            self:Refresh(); self.status:SetText(Details.Plain(job.reason.." "..self.model.status))
++            if job.committed then collector.changed() end
++        end)
++    end
++    function self:Create()
++        if self.frame then return true end
++        if combat() then return false end
++        local frame=env.CreateFrame("Frame","CraftArmyProfessionDetails",env.UIParent,"BasicFrameTemplateWithInset")
++        self.frame=frame; frame:SetSize(780,540); frame:SetPoint("CENTER")
++        frame.TitleText:SetText("CraftArmy — profession Details")
++        local function label(width,x,y)
++            local t=frame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
++            t:SetWidth(width); t:SetJustifyH("LEFT"); t:SetWordWrap(true); t:SetPoint("TOPLEFT",x,y); return t
++        end
++        local function button(text,width,x,fn)
++            local b=env.CreateFrame("Button",nil,frame,"UIPanelButtonTemplate")
++            b:SetSize(width,22); b:SetPoint("BOTTOMLEFT",x,42); b:SetText(text); b:SetScript("OnClick",fn); return b
++        end
++        self.status=label(740,18,-32); self.tree=label(740,18,-64); self.title=label(740,18,-91)
++        self.position=label(90,660,-118)
++        self.scroll=env.CreateFrame("ScrollFrame",nil,frame,"UIPanelScrollFrameTemplate")
++        self.scroll:SetPoint("TOPLEFT",18,-143); self.scroll:SetSize(716,310)
++        self.body=env.CreateFrame("EditBox",nil,self.scroll)
++        self.body:SetMultiLine(true); self.body:SetAutoFocus(false); self.body:SetFontObject("ChatFontNormal")
++        self.body:SetWidth(710); self.body:SetTextInsets(4,4,4,4); self.body:SetMaxLetters(0)
++        self.body:SetScript("OnTextChanged",function(edit)
++            if edit:GetText()~=self.bodyText then edit:SetText(self.bodyText or "") end
++        end)
++        self.body:SetScript("OnEditFocusGained",function(edit) edit:ClearFocus() end)
++        self.body:SetScript("OnEscapePressed",function() self:Close() end)
++        self.scroll:SetScrollChild(self.body)
++        self.previous=button("Previous branch",125,18,function() self.index=self.index-1; self:Render() end)
++        self.next=button("Next branch",125,151,function() self.index=self.index+1; self:Render() end)
++        self.refresh=button("Refresh details",135,292,function() self:Start() end)
++        self.close=button("Close",85,655,function() self:Close() end)
++        self.footer=label(740,18,-511); self.footer:SetText("Recipe learning not checked in this slice.")
++        self.driver=env.CreateFrame("Frame",nil,frame)
++        frame:SetScript("OnHide",function() self:Retire() end)
++        frame:SetScript("OnKeyDown",function(f,key)
++            if key=="ESCAPE" then f:SetPropagateKeyboardInput(false); self:Close()
++            else f:SetPropagateKeyboardInput(true) end
++        end)
++        frame:EnableKeyboard(true)
++        if type(env.UISpecialFrames)=="table" then env.UISpecialFrames[#env.UISpecialFrames+1]="CraftArmyProfessionDetails" end
++        frame:Hide(); return true
++    end
++    function self:Open(scope)
++        self:Retire()
++        if combat() or not self:Create() then return false end
++        self.scope=C.Copy(scope); self.index=1
++        local scale=1
++        for _,d in ipairs({{"GetWidth",780},{"GetHeight",540}}) do
++            if env.UIParent and type(env.UIParent[d[1]])=="function" then
++                local ok,n=pcall(env.UIParent[d[1]],env.UIParent)
++                if ok and C.Finite(n) and n>30 then scale=math.min(scale,(n-30)/d[2]) end
++            end
++        end
++        self.frame:SetScale(C.Finite(scale) and scale>0 and scale or 1)
++        self.frame:Show(); self:Refresh(); return true
++    end
++    return self
++end
+# CraftArmy/Dashboard.lua baseSHA256=cdff5b2d4c315830dcbff2c4d34575dcc84194bfcd78222cddfb2dd2659a140d targetSHA256=b25e4a0f4a584926f2c9822a70be0da289661b3575cbf61a49a0f64adfcb0f3b
+--- pre-U03/CraftArmy/Dashboard.lua
++++ U03/CraftArmy/Dashboard.lua
+@@ -288,7 +288,15 @@
+                 end)
+                 cell:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+                 -- Propagate selection without intercepting tooltip hover.
+-                cell:SetScript("OnMouseDown",function() self.selected=w.row; self:Render() end)
++                cell:SetScript("OnMouseDown",function(_,mouse)
++                    self.selected=w.row; self:Render()
++                    if col==I.Profession and mouse=="LeftButton" and w.row then
++                        if combat() then return end
++                        if not self.details then self.details=NS.Details.NewView(env,collector) end
++                        local r=w.row
++                        self.details:Open({guid=r.guid,id=r.id,generation=r.generation,archived=r.archived==true})
++                    end
++                end)
+                 w.cells[col]=cell; left=left+widths[col]
+             end
+             w.bars={}
+@@ -382,6 +390,7 @@
+             self.selected=found
+         end
+         self:Render()
++        if self.details then self.details:Refresh() end
+     end
+     function self:Toggle()
+         if combat() then self.wantOpen=true; self.collector.reason="Dashboard deferred until out of combat."; return end
+# CraftArmy/SelfTests.lua baseSHA256=08327b6f6435d6a8bddc7007b6a2466ff2fabf8d8556f95868beca6746009025 targetSHA256=e62a18fc14d0e4c9b02e5a0db3991ec1bc58548fec5fd1b62b0ea1877c59e7c6
+--- pre-U03/CraftArmy/SelfTests.lua
++++ U03/CraftArmy/SelfTests.lua
+@@ -5028,6 +5028,746 @@
+ end
+ -- U02 END
+ 
++-- U03 BEGIN: only additive fixtures; existing 181 cases and helpers are frozen.
++do
++local Details=NS.Details
++local RULE="Improve the efficiency of all Inscription crafts, gaining +1 Multicraft, +1 Ingenuity, and +1 Resourcefulness per point in this specialization."
++local PERK="Learn to craft an Thalassian Treatise on Inscription.\n\nLearn a sub-specialization of your choice."
++local function reportFixture()
++    return {version=1,skillLineID=2913,configID=1001,sourceScanAt=100,trees={
++        {id=1124,name="Calm Hands",root=106280,purchased=10,capacity=10,paths={
++            {id=106280,name="Calm Hands",purchased=10,capacity=10,locked=false,description=RULE,perks={
++                {id=106276,rank=0,state=2,isMajorPerk=true,description=PERK}}}}}}}
++end
++local function fixture()
++    local env,s=fixtureAPI()
++    local n={ID=106280,type=1,flags=0,isAvailable=true,ranksPurchased=11,currentRank=11,activeRank=11,
++        ranksIncreased=0,maxRanks=11,totalMaxRanks=11,activeEntry={entryID=131037,rank=10},
++        entryIDs={131041,131037},entryIDsWithCommittedRanks={131037},entryIDToRanksIncreased={[131041]=0,[131037]=0}}
++    env.C_ProfSpecs.GetSpecTabIDsForSkillLine=function() return {1124} end
++    env.C_ProfSpecs.GetTabInfo=function() return {name="Calm Hands"} end
++    env.C_ProfSpecs.GetRootPathForTab=function() return 106280 end
++    env.C_ProfSpecs.GetSpendEntryForPath=function() return 131037 end
++    env.C_ProfSpecs.GetUnlockEntryForPath=function() return 131041 end
++    env.C_ProfSpecs.GetSpendCurrencyForPath=function() return 3902 end
++    env.C_Traits.GetNodeInfo=function(config,id) eq(config,1001); eq(id,106280); return n end
++    env.C_Traits.GetEntryInfo=function(_,id) return {type=id==131041 and 9 or 7,maxRanks=id==131041 and 1 or 10,entryCost={}} end
++    env.C_Traits.GetNodeCost=function() return {{ID=3902,amount=1}} end
++    env.C_Traits.GetTreeCurrencyInfo=function() return {{traitCurrencyID=3902,quantity=0,spent=10}} end
++    local c=NS.Collectors.New(env,C.Open(nil))
++    local raw=k2Raw(c); local result=K.Evaluate(raw); eq(result.complete,true)
++    result.trees[1].paths[1].name="Calm Hands"
++    local g=assert(C.Apply(c.db,character,identity,k2Observations(raw,result,100),100,"fixture"))
++    c.fresh[character.guid..":2913"]={generation=g.generation,fields={unspent=true,["tree:1124"]=true}}
++    local calls={}
++    local function log(name,...)
++        calls[#calls+1]={name,...}
++    end
++    local old=env.C_Traits.GetNodeInfo
++    env.C_Traits.GetNodeInfo=function(...) log("node",...); return old(...) end
++    env.C_ProfSpecs.GetDescriptionForPath=function(id) eq(id,106280); log("path",id); return RULE end
++    env.C_ProfSpecs.GetPerksForPath=function(id) eq(id,106280); log("list",id); return {{perkID=106276,isMajorPerk=true}} end
++    env.C_ProfSpecs.GetUnlockRankForPerk=function(id) eq(id,106276); log("rank",id); return 0 end
++    env.C_ProfSpecs.GetStateForPerk=function(id,config) eq(id,106276); eq(config,1001); log("state",id,config); return 2 end
++    env.C_ProfSpecs.GetDescriptionForPerk=function(id) eq(id,106276); log("perk",id); return PERK end
++    s.at=200
++    return env,s,c,{guid=character.guid,id=2913,generation=g.generation,archived=false},n,calls
++end
++local function finish(job,checkpoint)
++    while job.status=="running" do job:Step(); pause(checkpoint,"U03 capture unit") end
++    return job
++end
++local function active(c) return c.db.characters[character.guid].professions[2913].active end
++local function widgets(env)
++    local created=mockWidgets(env)
++    local old=env.CreateFrame
++    env.UISpecialFrames={}
++    env.CreateFrame=function(...)
++        local w=old(...)
++        w.SetEnabled=function(self,v) self.enabled=v end
++        w.SetVerticalScroll=function(self,v) self.scrollOffset=v end
++        w.SetTextInsets=function(self,...) self.insets={...} end
++        w.EnableKeyboard=function(self,v) self.keyboard=v end
++        w.SetPropagateKeyboardInput=function(self,v) self.propagate=v end
++        local hide=w.Hide
++        w.Hide=function(self)
++            local shown=self.shown; hide(self)
++            if shown and self.scripts.OnHide then self.scripts.OnHide(self) end
++        end
++        return w
++    end
++    return created
++end
++case("U03 typed optional field native sample rank0 multiline exact and independent copy",function()
++    local r=reportFixture(); eq(C.ValidPayload("professionDetails",r,"observed"),true)
++    local db,g=dbWith({professionDetails=r}); eq(C.Open(db),db)
++    r.trees[1].paths[1].perks[1].description="mutated"
++    eq(g.fields.professionDetails.last.value.trees[1].paths[1].perks[1].description,PERK)
++    local copy=C.Copy(db); eq(C.Open(copy),copy)
++    eq(C.Archive(copy,character.guid,2913,20,"fixture"),true); eq(C.Open(copy),copy)
++    eq(C.Open(dbWith({unspent=0}))~=nil,true)
++end)
++case("U03 malformed scalar types bounds names descriptions and earned contradictions reject",function(checkpoint)
++    local mutations={
++        function(r) r.version=2 end,function(r) r.skillLineID=773 end,function(r) r.configID=0 end,
++        function(r) r.sourceScanAt=nil end,function(r) r.sourceScanAt=0/0 end,
++        function(r,t) t.id=2147483648 end,function(r,t) t.root=1 end,function(r,t) t.capacity=0 end,
++        function(r,t) t.purchased=9 end,function(r,t) t.name=" " end,function(r,t) t.name="bad|name" end,
++        function(r,t) t.name=string.rep("x",257) end,function(r,t) t.name="bad\nname" end,
++        function(r,t,p) p.id=0 end,function(r,t,p) p.purchased=false end,function(r,t,p) p.capacity=9 end,
++        function(r,t,p) p.locked=nil end,function(r,t,p) p.locked=true end,
++        function(r,t,p) p.description=nil end,function(r,t,p) p.description=string.rep("x",4097) end,
++        function(r,t,p,k) k.id=0 end,function(r,t,p,k) k.rank=nil end,function(r,t,p,k) k.rank=11 end,
++        function(r,t,p,k) k.state=1 end,function(r,t,p,k) k.state=3 end,function(r,t,p,k) k.state=false end,
++        function(r,t,p,k) k.isMajorPerk=1 end,function(r,t,p,k) k.description="\n \t" end,
++        function(r,t,p,k) k.description=string.rep("x",4097) end,
++    }
++    for i,change in ipairs(mutations) do
++        local r=reportFixture(); local t=r.trees[1]; local p=t.paths[1]; change(r,t,p,p.perks[1])
++        eq(C.ValidPayload("professionDetails",r,"observed"),false,"mutation "..i)
++        pause(checkpoint,"U03 malformed payload")
++    end
++    local r=reportFixture(); r.sourceScanAt=0; r.trees[1].paths[1].description=""
++    eq(C.ValidPayload("professionDetails",r,"observed"),true)
++end)
++case("U03 dense caps duplicate identities and total description byte boundary",function(checkpoint)
++    local changes={
++        function(r) r.trees[2]=C.Copy(r.trees[1]) end,
++        function(r) r.trees[3]=C.Copy(r.trees[1]) end,
++        function(r,t,p) t.paths[2]=C.Copy(p) end,
++        function(r,t,p) p.perks[2]=C.Copy(p.perks[1]) end,
++        function(r,t,p) p.perks[3]=C.Copy(p.perks[1]) end,
++        function(r,t,p) for i=2,33 do p.perks[i]={id=i,rank=0,state=0,isMajorPerk=false,description="x"} end end,
++        function(r,t) for i=2,9 do local x=C.Copy(t); x.id=i; r.trees[i]=x end end,
++    }
++    for _,change in ipairs(changes) do
++        local r=reportFixture(); change(r,r.trees[1],r.trees[1].paths[1]); eq(C.ValidPayload("professionDetails",r,"observed"),false)
++        pause(checkpoint,"U03 payload list bounds")
++    end
++    local r=reportFixture(); local p=r.trees[1].paths[1]; p.description=""; p.perks={}
++    for i=1,8 do p.perks[i]={id=i,rank=0,state=0,isMajorPerk=false,description=string.rep("x",4096)} end
++    eq(C.ValidPayload("professionDetails",r,"observed"),true)
++    p.description="x"; eq(C.ValidPayload("professionDetails",r,"observed"),false)
++end)
++case("U03 scope guard optional missing field old DB and invalid generation atomic rejection",function()
++    local r=reportFixture(); local db,g=dbWith({unspent=0}); local before=db.characters[character.guid]
++    local bad=C.Copy(identity); bad.expansionID=10
++    eq(C.Apply(db,character,bad,{professionDetails=C.Observation("observed",r,20,"fixture")},10,"fixture"),nil)
++    eq(db.characters[character.guid],before); eq(g.scannedAt,10)
++    g.fields.professionDetails=C.Merge(nil,C.Observation("observed",r,20,"fixture"),"fixture",1)
++    g.identity.expansionID=10; eq(C.Open(db),nil); eq(db.characters[character.guid],before)
++end)
++case("U03 job exact arguments one metadata perk verify commit unit and independent timestamps",function(checkpoint)
++    local env,s,c,scope,n,calls=fixture(); local g=active(c); local old=C.Copy(g.fields)
++    local job=Details.NewCaptureJob(env,c,scope); eq(job.status,"running"); eq(#calls,0)
++    job:Step(); eq(job.phase,"perk"); eq(#calls,3); eq(calls[1][1],"node"); eq(calls[1][2],1001)
++    eq(calls[1][3],106280); eq(calls[2][1],"path"); eq(calls[3][1],"list"); eq(active(c),g)
++    pause(checkpoint,"U03 metadata")
++    job:Step(); eq(job.phase,"verify"); eq(#calls,6); eq(calls[5][1],"state"); eq(calls[5][3],1001); eq(active(c),g)
++    job:Step(); eq(job.phase,"commit"); eq(#calls,7); eq(active(c),g)
++    s.at=300; job:Step(); eq(job.status,"complete"); eq(job.steps,4); eq(#calls,8)
++    eq(calls[8][1],"node"); eq(calls[8][2],1001); eq(calls[8][3],106280)
++    local new=active(c); eq(new.scannedAt,100); eq(new.fields.professionDetails.last.observedAt,300)
++    eq(new.fields.professionDetails.last.value.sourceScanAt,100); eq(new.fields.professionDetails.attempt.attemptedAt,300)
++    eq(new.fields.professionDetails.last.value.trees[1].paths[1].description,RULE)
++    eq(new.fields.professionDetails.last.value.trees[1].paths[1].perks[1].description,PERK)
++    eq(deepEqual(old,new.fields)==false,true)
++    for k,v in pairs(old) do assert(deepEqual(v,new.fields[k]),"unrelated field "..k) end
++    eq(c.fresh[character.guid..":2913"].fields.unspent,true); eq(c.fresh[character.guid..":2913"].fields.professionDetails,true)
++    job:Step(); eq(active(c),new); eq(#calls,8)
++end)
++case("U03 API failures pending unknown contradictory ranks preserve old whole snapshot",function(checkpoint)
++    for _,mode in ipairs({"pending","unknown","nil","throw","locked","rank","blank","long","pathlong","missing"}) do
++        local env,s,c,scope=fixture(); eq(finish(Details.NewCaptureJob(env,c,scope)).status,"complete")
++        local before=active(c).fields.professionDetails.last; local old=C.Copy(before); s.at=400
++        if mode=="pending" then env.C_ProfSpecs.GetStateForPerk=function() return 1 end
++        elseif mode=="unknown" then env.C_ProfSpecs.GetStateForPerk=function() return 9 end
++        elseif mode=="nil" then env.C_ProfSpecs.GetStateForPerk=function() end
++        elseif mode=="throw" then env.C_ProfSpecs.GetDescriptionForPerk=function() error("PRIVATE SECRET") end
++        elseif mode=="rank" then env.C_ProfSpecs.GetUnlockRankForPerk=function() return 11 end
++        elseif mode=="blank" then env.C_ProfSpecs.GetDescriptionForPerk=function() return " \n" end
++        elseif mode=="long" then env.C_ProfSpecs.GetDescriptionForPerk=function() return string.rep("x",4097) end
++        elseif mode=="pathlong" then env.C_ProfSpecs.GetDescriptionForPath=function() return string.rep("x",4097) end
++        elseif mode=="missing" then env.C_ProfSpecs.GetPerksForPath=nil
++        elseif mode=="locked" then env.C_ProfSpecs.GetUnlockRankForPerk=function() return -1 end end
++        local job=finish(Details.NewCaptureJob(env,c,scope),checkpoint); eq(job.status,"failed",mode)
++        local g=active(c); assert(deepEqual(g.fields.professionDetails.last,old),mode)
++        eq(g.fields.professionDetails.attempt.status,"unknown"); eq(g.fields.professionDetails.attempt.attemptedAt,400)
++        eq(g.scannedAt,100); eq(c.fresh[character.guid..":2913"].fields.professionDetails,nil)
++        eq(c.fresh[character.guid..":2913"].fields.unspent,true); assert(not job.reason:find("PRIVATE",1,true))
++        pause(checkpoint,"U03 failure retained")
++    end
++end)
++case("U03 bounded raw perk lists reject holes keys malformed duplicate and overflow without prefix",function(checkpoint)
++    for _,mode in ipairs({"hole","key","duplicate","overflow","id","major","meta"}) do
++        local env,s,c,scope=fixture(); local g=active(c)
++        env.C_ProfSpecs.GetPerksForPath=function()
++            local k={perkID=106276,isMajorPerk=true}
++            if mode=="hole" then return {[2]=k} elseif mode=="key" then return {bad=k}
++            elseif mode=="duplicate" then return {k,k} elseif mode=="overflow" then local t={}; for i=1,33 do t[i]=k end; return t
++            elseif mode=="id" then k.perkID=0 elseif mode=="major" then k.isMajorPerk=nil
++            elseif mode=="meta" then return setmetatable({k},{}) end
++            return {k}
++        end
++        local job=finish(Details.NewCaptureJob(env,c,scope),checkpoint); eq(job.status,"failed",mode)
++        eq(active(c).fields.professionDetails.last,nil); eq(g.fields.professionDetails,nil)
++        pause(checkpoint,"U03 raw list rejected")
++    end
++end)
++case("U03 every yield scope safety cancellation source object and no-event point changes discard",function(checkpoint)
++    for _,boundary in ipairs({0,1,2,3}) do
++        for _,mode in ipairs({"combat","staged","closed","linked","offline","serial","revision","pointer","deleted","clock","points","cancel"}) do
++            local env,s,c,scope,n=fixture(); local job=Details.NewCaptureJob(env,c,scope)
++            for i=1,boundary do job:Step() end
++            local before=c.db.characters[character.guid]
++            if mode=="combat" then s.combat=true elseif mode=="staged" then s.staged=true
++            elseif mode=="closed" then s.shown=false elseif mode=="linked" then s.linked=true
++            elseif mode=="offline" then env.UnitGUID=function() return "other" end
++            elseif mode=="serial" then c.serial=c.serial+1 elseif mode=="revision" then c.revision=c.revision+1
++            elseif mode=="pointer" then before.professions[2913].active=C.Copy(active(c))
++            elseif mode=="deleted" then before.professions[2913].active=nil
++            elseif mode=="clock" then s.at=nil elseif mode=="points" then n.currentRank=10
++            elseif mode=="cancel" then job:Cancel() end
++            finish(job,checkpoint)
++            assert(job.status~="complete",mode..boundary)
++            eq(c.db.characters[character.guid],before); eq(active(c) and active(c).fields.professionDetails,nil)
++            pause(checkpoint,"U03 guarded yield")
++        end
++    end
++end)
++case("U03 startup unsafe archived foreign invalid DB missing source and clocks never write",function(checkpoint)
++    for _,mode in ipairs({"archived","foreign","otherprofession","generation","invaliddb","raw","index","config","staged","clock","combat","closed"}) do
++        local env,s,c,scope=fixture()
++        if mode=="archived" then scope.archived=true elseif mode=="foreign" then scope.guid="other"
++        elseif mode=="otherprofession" then scope.id=1 elseif mode=="generation" then scope.generation=2
++        elseif mode=="invaliddb" then c.db.schema=2 elseif mode=="raw" then active(c).fields.knowledgeRaw=nil
++        elseif mode=="index" then active(c).fields.knowledgeIndex=nil
++        elseif mode=="config" then env.C_ProfSpecs.GetConfigIDForSkillLine=function() return 1002 end
++        elseif mode=="staged" then s.staged=true elseif mode=="clock" then s.at=0/0
++        elseif mode=="combat" then s.combat=true elseif mode=="closed" then s.shown=false end
++        local before=c.db.characters[character.guid]
++        local job=Details.NewCaptureJob(env,c,scope); eq(job.status,"blocked",mode); job:Step()
++        eq(c.db.characters[character.guid],before); eq(active(c).fields.professionDetails,nil)
++        pause(checkpoint,"U03 startup guard")
++    end
++end)
++case("U03 API boundary reentrancy cancel and context changes sanitized no writes",function(checkpoint)
++    for _,mode in ipairs({"reenter","cancel","stage","replace","throwcontext"}) do
++        local env,s,c,scope=fixture(); local job=Details.NewCaptureJob(env,c,scope); local before=c.db.characters[character.guid]
++        env.C_ProfSpecs.GetDescriptionForPath=function()
++            if mode=="reenter" then job:Step() elseif mode=="cancel" then job:Cancel()
++            elseif mode=="stage" then s.staged=true elseif mode=="replace" then before.professions[2913].active=C.Copy(active(c))
++            elseif mode=="throwcontext" then c.Context=function() error("PRIVATE SECRET") end end
++            return RULE
++        end
++        finish(job,checkpoint); assert(job.status~="complete"); eq(c.db.characters[character.guid],before)
++        eq(active(c).fields.professionDetails,nil); assert(not job.reason:find("PRIVATE",1,true))
++        pause(checkpoint,"U03 callback safety")
++    end
++end)
++case("U03 stepcap invalid DB before commit and assembled alias budget fail atomically",function(checkpoint)
++    local env,s,c,scope=fixture(); local job=Details.NewCaptureJob(env,c,scope); job.steps=10000
++    local before=c.db.characters[character.guid]; job:Step(); eq(job.status,"failed"); eq(c.db.characters[character.guid],before)
++    pause(checkpoint,"U03 stepcap")
++    env,s,c,scope=fixture(); job=Details.NewCaptureJob(env,c,scope); job:Step(); job:Step(); job:Step()
++    before=c.db.characters[character.guid]; c.db.schema=2; job:Step(); eq(job.status,"discarded"); eq(c.db.characters[character.guid],before)
++    pause(checkpoint,"U03 invalid DB")
++    -- Small aliased graph, filled to the unchanged actual Copy visit boundary.
++    env,s,c,scope=fixture(); c.db.alias=c.db.characters
++    c.db.padding={}; local count=0
++    local function visits(v) count=count+1; if type(v)=="table" then for _,x in pairs(v) do visits(x) end end end
++    visits(c.db); local used=count
++    for i=1,50000-used do c.db.padding[i]=false end
++    eq(C.Open(c.db),c.db); before=c.db.characters[character.guid]
++    job=finish(Details.NewCaptureJob(env,c,scope),checkpoint); eq(job.status,"failed")
++    eq(c.db.characters[character.guid],before); eq(c.db.alias,c.db.characters); eq(active(c).fields.professionDetails,nil)
++    eq(active(c).scannedAt,100)
++end)
++case("U03 cached model owns coherent old points unknown versus empty and archived reload",function(checkpoint)
++    local env,s,c,scope=fixture(); local model=Details.Model(c,scope)
++    eq(#model.branches,1); assert(Details.Branch(model,1).body:find("Perks not observed",1,true))
++    finish(Details.NewCaptureJob(env,c,scope),checkpoint); model=Details.Model(c,scope)
++    assert(model.status:find("Fresh",1,true)); eq(model.branches[1].title,"Calm Hands: 10/10")
++    assert(Details.Branch(model,1).body:find(RULE,1,true)); assert(Details.Branch(model,1).body:find("Required rank 0",1,true))
++    assert(Details.Branch(model,1).body:find(PERK,1,true)); assert(not Details.Branch(model,1).body:find("learned",1,true))
++    c.fresh={}; active(c).scannedAt=101; model=Details.Model(c,scope)
++    assert(model.status:find("not current",1,true)); eq(model.branches[1].title,"Calm Hands: 10/10")
++    local currentTree=active(c).fields["tree:1124"].last.value; local currentPath=currentTree.paths[1]
++    currentTree.purchased=0; currentTree.accountingEvidence.spent=0; currentTree.accountingEvidence.totalPurchased=0
++    currentTree.currencies[1].spent=0; currentPath.purchased=0
++    local node=currentPath.node
++    node.ranksPurchased=1; node.currentRank=1; node.activeRank=1
++    node.activeEntry={entryID=currentPath.unlockEntryID,rank=1}
++    node.nextEntry={entryID=currentPath.spendEntryID,rank=1}; node.entryIDsWithCommittedRanks={currentPath.unlockEntryID}
++    local tab=active(c).fields.knowledgeRaw.last.value.tabs[1]
++    tab.paths[106280].node=C.Copy(node); tab.currencies[1].spent=0
++    eq(C.Open(c.db),c.db); model=Details.Model(c,scope)
++    eq(currentTree.purchased,0); eq(model.branches[1].title,"Calm Hands: 10/10","old perks never borrow newer zero points")
++    local db=C.Copy(c.db); eq(C.Archive(db,character.guid,2913,500,"fixture"),true)
++    c.db=db; scope.archived=true; model=Details.Model(c,scope); assert(model.status:find("Archived",1,true))
++    eq(model.branches[1].title,"Calm Hands: 10/10"); eq(Details.NewCaptureJob(env,c,scope).status,"blocked")
++end)
++case("U03 display markup preserves labels paragraphs and escapes unknown not source mutation",function()
++    eq(Details.Plain("|cffaabbccColor|r |Hspell:1|hVisible|h |Ticon:12|t|A:atlas:12|a\n\n|bad"),"Color Visible \n\n||bad")
++    eq(Details.Plain("|r |Tbroken |c1234"),"||r ||Tbroken ||c1234")
++    eq(Details.Plain("||Tliteral|t"),"||Tliteral||t")
++    local r=reportFixture(); local old=C.Copy(r); Details.Plain(r.trees[1].paths[1].perks[1].description); assert(deepEqual(r,old))
++end)
++case("U03 profession click left only lazy cached UI readonly wrapping navigation no auto collect",function(checkpoint)
++    local env,s,c,scope,n,calls=fixture(); widgets(env)
++    local ui=NS.Dashboard.New(env,c); ui:Toggle(); eq(ui.details,nil)
++    local w=ui.widgets[1]; local cell=w.cells[I.Profession]
++    cell.scripts.OnMouseDown(cell,"RightButton"); eq(ui.selected,w.row); eq(ui.details,nil)
++    cell.scripts.OnMouseDown(cell,"LeftButton"); local view=assert(ui.details); eq(view.frame.shown,true)
++    eq(#calls,0); eq(view.body.multiline,true); eq(view.body.style.SetAutoFocus[1],false); eq(view.body.focused,false)
++    eq(view.scroll.scrollChild,view.body); eq(view.body.width,710); eq(view.frame.width,780); eq(view.frame.height,540)
++    eq(view.driver.scripts.OnUpdate,nil); assert(view.body:GetText():find("Perks not observed",1,true))
++    local text=view.body:GetText(); view.body:SetText("editable?"); eq(view.body:GetText(),text)
++    view.refresh.scripts.OnClick(); local job=view.job; local old=active(c)
++    for i=1,3 do
++        local update=assert(view.driver.scripts.OnUpdate); local before=#calls; update()
++        eq(job.steps,i); assert(#calls-before<=3); eq(active(c),old); eq(view.body:GetText(),text)
++        pause(checkpoint,"U03 real UI frame")
++    end
++    local notified=0; c.changed=function() eq(view.job,nil); eq(view.driver.scripts.OnUpdate,nil); notified=notified+1 end
++    view.driver.scripts.OnUpdate(); eq(job.status,"complete"); eq(notified,1)
++    assert(view.body:GetText():find(PERK,1,true)); eq(view.footer:GetText(),"Recipe learning not checked in this slice.")
++    local before=#calls; ui:Refresh(); ui:Render(); view:Open(scope); eq(#calls,before)
++    view:Start(); local cancelled=view.job; local stale=view.driver.scripts.OnUpdate
++    view:Start(); eq(cancelled.status,"cancelled"); local current=view.job; stale(); eq(current.steps,0)
++    view.close.scripts.OnClick(); eq(current.status,"cancelled"); eq(view.driver.scripts.OnUpdate,nil)
++end)
++case("U03 panel Escape hide reopen combat cancellation parent fit and stable deleted scope",function(checkpoint)
++    for _,mode in ipairs({"escape","hide","reopen","combat"}) do
++        local env,s,c,scope=fixture(); widgets(env); local view=Details.NewView(env,c); assert(view:Open(scope)); view:Start()
++        local job=view.job; local callback=view.driver.scripts.OnUpdate
++        if mode=="escape" then view.frame.scripts.OnKeyDown(view.frame,"ESCAPE")
++        elseif mode=="hide" then view.frame:Hide() elseif mode=="reopen" then view:Open(scope)
++        elseif mode=="combat" then s.combat=true; callback() end
++        eq(job.status,"cancelled"); eq(view.driver.scripts.OnUpdate,nil); callback(); eq(job.steps,0)
++        s.combat=false; view:Open(scope); eq(view.driver.scripts.OnUpdate,nil)
++        pause(checkpoint,"U03 UI cancellation")
++    end
++    local env,s,c,scope=fixture(); widgets(env); local view=Details.NewView(env,c)
++    s.combat=true; eq(view:Open(scope),false); eq(view.frame,nil); s.combat=false
++    env.UIParent.width=400; env.UIParent.height=300; assert(view:Open(scope)); assert(view.frame.scale<1)
++    env.UIParent.width=0/0; env.UIParent.height=math.huge; view:Open(scope); eq(view.frame.scale,1)
++    C.Delete(c.db,scope,true); view:Refresh(); eq(#view.model.branches,0); eq(view.refresh.enabled,false)
++    local ctx=c:Context(); C.Apply(c.db,ctx.character,ctx.identity,{unspent=C.Observation("observed",0,300,"fixture")},300,"fixture")
++    view:Refresh(); eq(#view.model.branches,0); eq(view.refresh.enabled,false)
++end)
++case("U03 long scroll branch nav zero locked earned-empty and unsupported read-only",function(checkpoint)
++    local env,s,c,scope=fixture(); widgets(env); finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    local g=active(c); local r=g.fields.professionDetails.last.value; local t=r.trees[1]; local p=t.paths[1]
++    p.description=string.rep("Conditions apply to these crafts.\n\n",100); p.perks={}
++    local second=C.Copy(p); second.id=106279; second.name="Locked"; second.locked=true; second.purchased=0
++    second.description=""; t.paths[2]=second; t.capacity=20
++    eq(C.Open(c.db),c.db)
++    local view=Details.NewView(env,c); view:Open(scope); assert(view.body.height>view.scroll.height)
++    eq(view.next.enabled,true); eq(view.previous.enabled,false); assert(view.body:GetText():find("None earned",1,true))
++    view.next.scripts.OnClick(); eq(view.index,2); eq(view.title:GetText(),"Locked: 0/10")
++    assert(view.body:GetText():find("Locked",1,true)); eq(view.next.enabled,false)
++    view.previous.scripts.OnClick(); eq(view.index,1)
++    local other=C.Copy(identity); other.skillLineID=999; other.parentID=164; other.profession=2
++    local ctx=c:Context(); local new=assert(C.Apply(c.db,ctx.character,other,{unspent=C.Observation("observed",0,400,"fixture")},400,"fixture"))
++    view:Open({guid=character.guid,id=999,generation=new.generation,archived=false})
++    eq(view.refresh.enabled,false); assert(view.status:GetText():find("unavailable",1,true))
++end)
++case("U03 ordinary Scan never invokes new capture APIs cached offline open has no live reads",function()
++    local env,s,c,scope,n,calls=fixture(); eq(c:Scan(),true); eq(#calls,1) -- ordinary existing GetNodeInfo only
++    eq(calls[1][1],"node")
++    widgets(env)
++    local function forbidden() error("unexpected live cached read") end
++    c.Context=forbidden; c.Now=forbidden
++    for _,space in ipairs({env.C_ProfSpecs,env.C_Traits}) do for k in pairs(space) do space[k]=forbidden end end
++    local view=Details.NewView(env,c); eq(view:Open(scope),true); view:Refresh(); eq(view.driver.scripts.OnUpdate,nil)
++end)
++
++-- Additional amended-contract fixtures use small selected native source projections,
++-- not repeated large Scan workloads. No shared fixtures/widgets or host clocks change.
++local function multiFixture(count,perks)
++    local env,s,c,scope=fixture(); local g=active(c)
++    local raw=g.fields.knowledgeRaw.last.value; local template=C.Copy(g.fields["tree:1124"].last.value)
++    local rawTemplate=C.Copy(raw.tabs[1]); local nodes,calls={},{}
++    raw.tabs={}; g.fields.knowledgeIndex.last.value={}; g.fields["tree:1124"]=nil
++    local cursor=1
++    while cursor<=count do
++        local size=math.min(32,count-cursor+1); local id=1123+#raw.tabs+1
++        local t=C.Copy(template); local tab=C.Copy(rawTemplate)
++        t.id=id; t.root=106279+cursor; t.paths={}; t.purchased=10*size; t.capacity=10*size
++        t.coverage.captured=size; t.coverage.discovered=size
++        t.accountingEvidence.spent=10*count; t.accountingEvidence.totalPurchased=10*count
++        t.currencies[1].spent=10*count
++        tab.id=id; tab.root=t.root; tab.paths={}; tab.currencies[1].spent=10*count
++        for j=1,size do
++            local pid=106279+cursor; cursor=cursor+1
++            local p=C.Copy(template.paths[1]); p.id=pid; p.node.ID=pid; p.name="Branch "..pid
++            p.children=j<size and {pid+1} or {}
++            t.paths[#t.paths+1]=p; tab.paths[pid]=C.Copy(p); nodes[pid]=p.node
++        end
++        raw.tabs[#raw.tabs+1]=tab
++        g.fields.knowledgeIndex.last.value[#raw.tabs]={id=id,name=t.name,root=t.root}
++        g.fields["tree:"..id]=C.Merge(nil,C.Observation("observed",t,100,"fixture"),"fixture",g.generation)
++    end
++    eq(C.Open(c.db),c.db)
++    local function log(kind,...) calls[#calls+1]={kind,...} end
++    env.C_Traits.GetNodeInfo=function(config,id) eq(config,1001); assert(nodes[id]); log("node",config,id); return nodes[id] end
++    env.C_ProfSpecs.GetDescriptionForPath=function(id) assert(nodes[id]); log("path",id); return "" end
++    env.C_ProfSpecs.GetPerksForPath=function(id)
++        assert(nodes[id]); log("list",id); local out={}
++        for i=1,perks or 0 do out[i]={perkID=id*100+i,isMajorPerk=i%2==0} end
++        return out
++    end
++    env.C_ProfSpecs.GetUnlockRankForPerk=function(id) log("rank",id); return 0 end
++    env.C_ProfSpecs.GetStateForPerk=function(id,config) eq(config,1001); log("state",id,config); return 2 end
++    env.C_ProfSpecs.GetDescriptionForPerk=function(id) log("perk",id); return "Conditional milestone.\n\nApplies only to these crafts." end
++    return env,s,c,scope,nodes,calls
++end
++local function boundedReport(paths,perks)
++    local r=reportFixture(); r.trees={}
++    local id=1
++    while id<=paths do
++        local t={id=100+#r.trees,name="Tree",root=id,purchased=0,capacity=0,paths={}}
++        for j=1,math.min(32,paths-id+1) do
++            local p={id=id,name="Branch",purchased=0,capacity=10,locked=false,description="",perks={}}
++            for k=1,perks or 0 do p.perks[k]={id=id*100+k,rank=0,state=0,isMajorPerk=false,description="x"} end
++            t.paths[#t.paths+1]=p; t.capacity=t.capacity+10; id=id+1
++        end
++        r.trees[#r.trees+1]=t
++    end
++    return r
++end
++case("U03 global64 paths512 perks exact fit overflow cross-tree duplicate identities and zero boundaries",function(checkpoint)
++    local r=boundedReport(64,8); eq(C.ValidPayload("professionDetails",r,"observed"),true)
++    r.trees[2].paths[1].perks[9]={id=99999,rank=0,state=0,isMajorPerk=false,description="x"}
++    eq(C.ValidPayload("professionDetails",r,"observed"),false,"513 global perks")
++    pause(checkpoint,"U03 global typed limits")
++    eq(C.ValidPayload("professionDetails",boundedReport(65,0),"observed"),false,"65 global paths")
++    r=boundedReport(33,1); r.trees[2].paths[1].id=r.trees[1].paths[1].id
++    r.trees[2].root=r.trees[2].paths[1].id; eq(C.ValidPayload("professionDetails",r,"observed"),false)
++    r=boundedReport(33,1); r.trees[2].paths[1].perks[1].id=r.trees[1].paths[1].perks[1].id
++    eq(C.ValidPayload("professionDetails",r,"observed"),false)
++    r=boundedReport(1,0); local p=r.trees[1].paths[1]; p.name=string.rep("n",256); r.trees[1].name=p.name
++    eq(C.ValidPayload("professionDetails",r,"observed"),true); p.locked=true
++    eq(C.ValidPayload("professionDetails",r,"observed"),true)
++    p.perks={{id=1,rank=0,state=2,isMajorPerk=false,description="x"}}
++    eq(C.ValidPayload("professionDetails",r,"observed"),false,"locked rank0 not earned")
++    p.locked=false; eq(C.ValidPayload("professionDetails",r,"observed"),true,"unlocked zero rank0 earned")
++    p.perks[1].rank=1; eq(C.ValidPayload("professionDetails",r,"observed"),false,"earned above investment")
++    p.perks[1].state=0; eq(C.ValidPayload("professionDetails",r,"observed"),true)
++end)
++case("U03 compact final64 scalar batch exact counts source order no pernode Context or DB walk",function(checkpoint)
++    local env,s,c,scope,nodes,calls=multiFixture(64,0)
++    local originalOpen,originalCopy=C.Open,C.Copy
++    local opens,copies,contexts=0,0,0; local originalContext=c.Context
++    local job
++    -- Wrappers are restored before each checkpoint, including on assertion errors.
++    local function measured(fn)
++        C.Open=function(...) opens=opens+1; return originalOpen(...) end
++        C.Copy=function(...) copies=copies+1; return originalCopy(...) end
++        c.Context=function(...) contexts=contexts+1; return originalContext(...) end
++        local ok,why=pcall(fn)
++        C.Open=originalOpen; C.Copy=originalCopy; c.Context=originalContext
++        assert(ok,why)
++    end
++    measured(function() job=Details.NewCaptureJob(env,c,scope) end)
++    eq(job.status,"running"); eq(opens,1); eq(copies,0); eq(#calls,0)
++    for i=1,128 do
++        local before=#calls; local oldOpen,oldCopy=opens,copies
++        measured(function() job:Step() end)
++        eq(opens,oldOpen); eq(copies,oldCopy)
++        eq(#calls-before,i<=64 and 3 or 1); eq(job.status,"running")
++        pause(checkpoint,"U03 bounded normal unit")
++    end
++    eq(job.phase,"commit"); local before=#calls; local oldContext=contexts; local oldOpen=opens
++    measured(function() job:Step() end)
++    eq(job.status,"complete"); eq(job.steps,129); eq(#calls-before,64)
++    eq(contexts-oldContext,2,"only bracketing Contexts in final batch")
++    eq(opens-oldOpen,1,"only unchanged Apply opens the DB")
++    local r=active(c).fields.professionDetails.last.value; local i=before+1
++    for _,t in ipairs(r.trees) do for _,p in ipairs(t.paths) do
++        eq(calls[i][1],"node"); eq(calls[i][2],1001); eq(calls[i][3],p.id); i=i+1
++    end end
++    eq(#r.trees,2); eq(#r.trees[1].paths,32); eq(#r.trees[2].paths,32)
++    local saved=C.Copy(r); nodes[106280].currentRank=0
++    assert(deepEqual(r,saved),"raw native node not retained by report")
++end)
++case("U03 first path changed after prior verify and final gap across every source path discards",function(checkpoint)
++    for _,boundary in ipairs({4,5,6}) do
++        for _,id in ipairs({106280,106281,106282}) do
++            local env,s,c,scope,nodes=multiFixture(3,0); local job=Details.NewCaptureJob(env,c,scope)
++            for i=1,boundary do job:Step() end
++            local before=c.db.characters[character.guid]; nodes[id].activeEntry.rank=9
++            finish(job,checkpoint); eq(job.status,"discarded"); eq(c.db.characters[character.guid],before)
++            eq(active(c).fields.professionDetails,nil)
++            pause(checkpoint,"U03 late multipath point change")
++        end
++    end
++end)
++case("U03 final batch missing errors malformed nodes and callback invalidation terminal no retry",function(checkpoint)
++    for _,mode in ipairs({"missing","nil","throw","bad","reenter","cancel","stage","pointer","schema","time"}) do
++        local env,s,c,scope,nodes,calls=multiFixture(3,0); local job=Details.NewCaptureJob(env,c,scope)
++        for i=1,6 do job:Step() end
++        local before=c.db.characters[character.guid]; local original=env.C_Traits.GetNodeInfo
++        env.C_Traits.GetNodeInfo=function(config,id)
++            if id==106281 then
++                if mode=="nil" then return nil elseif mode=="throw" then error("PRIVATE FINAL")
++                elseif mode=="bad" then return {ID=id} elseif mode=="reenter" then job:Step()
++                elseif mode=="cancel" then job:Cancel() elseif mode=="stage" then s.staged=true
++                elseif mode=="pointer" then before.professions[2913].active=C.Copy(active(c))
++                elseif mode=="schema" then c.db.schema=2 elseif mode=="time" then s.at=199 end
++            end
++            return original(config,id)
++        end
++        if mode=="missing" then env.C_Traits.GetNodeInfo=nil end
++        job:Step(); assert(job.status~="running"); assert(job.status~="complete")
++        local count=#calls; job:Step(); eq(#calls,count); eq(c.db.characters[character.guid],before)
++        eq(active(c).fields.professionDetails,nil); assert(not job.reason:find("PRIVATE",1,true))
++        pause(checkpoint,"U03 terminal final batch")
++    end
++end)
++case("U03 every raw node scalar and activeEntry uses actual native integer guard before compare",function(checkpoint)
++    local keys={"ID","type","flags","currentRank","activeRank","ranksPurchased","ranksIncreased","maxRanks","totalMaxRanks","entryID","rank","isAvailable"}
++    for _,phase in ipairs({"metadata","verify","commit"}) do
++        for _,key in ipairs(keys) do
++            local env,s,c,scope,n=fixture(); local job=Details.NewCaptureJob(env,c,scope)
++            if phase~="metadata" then job:Step(); job:Step() end
++            if phase=="commit" then job:Step() end
++            local before=c.db.characters[character.guid]
++            if key=="entryID" or key=="rank" then n.activeEntry[key]=0/0
++            elseif key=="isAvailable" then n[key]=1 else n[key]=0/0 end
++            finish(job,checkpoint); assert(job.status~="complete",key..phase); eq(c.db.characters[character.guid],before)
++            pause(checkpoint,"U03 actual runtime numeric rejection")
++        end
++    end
++    for _,bad in ipairs({math.huge,-math.huge,-1,0.5,"11",false}) do
++        local env,s,c,scope,n=fixture(); local job=Details.NewCaptureJob(env,c,scope); n.currentRank=bad
++        finish(job,checkpoint); assert(job.status~="complete")
++        pause(checkpoint,"U03 typed current node")
++    end
++end)
++case("U03 backwards clocks within jobs prior good time and actual final validated time",function(checkpoint)
++    for _,boundary in ipairs({0,1,2,3}) do
++        local env,s,c,scope=fixture(); eq(finish(Details.NewCaptureJob(env,c,scope)).status,"complete")
++        local old=C.Copy(active(c).fields.professionDetails); s.at=300
++        local job=Details.NewCaptureJob(env,c,scope)
++        for i=1,boundary do job:Step() end
++        local before=c.db.characters[character.guid]; s.at=299
++        finish(job,checkpoint); assert(job.status~="complete"); eq(c.db.characters[character.guid],before)
++        assert(deepEqual(old,active(c).fields.professionDetails))
++    end
++    local env,s,c,scope=fixture(); eq(finish(Details.NewCaptureJob(env,c,scope)).status,"complete")
++    s.at=199; eq(Details.NewCaptureJob(env,c,scope).status,"blocked","older than previous good details")
++    s.at=300; local job=Details.NewCaptureJob(env,c,scope); job:Step(); job:Step(); job:Step()
++    local original=c.Context; local contexts=0
++    c.Context=function(self) contexts=contexts+1; if contexts==2 then s.at=305 end; return original(self) end
++    job:Step(); eq(job.status,"complete"); eq(active(c).fields.professionDetails.last.observedAt,305)
++    eq(active(c).scannedAt,100)
++end)
++case("U03 failed attempt also final verifies points or writes nothing and preserves successful freshness",function(checkpoint)
++    for _,mode in ipairs({"points","unavailable","safe"}) do
++        local env,s,c,scope,n=fixture(); eq(finish(Details.NewCaptureJob(env,c,scope)).status,"complete")
++        local before=c.db.characters[character.guid]; local last=C.Copy(active(c).fields.professionDetails.last)
++        s.at=400; env.C_ProfSpecs.GetStateForPerk=function() return 1 end
++        local job=Details.NewCaptureJob(env,c,scope); job:Step(); job:Step(); eq(job.phase,"commit")
++        if mode=="points" then n.currentRank=9 elseif mode=="unavailable" then env.C_Traits.GetNodeInfo=nil end
++        job:Step(); assert(job.status~="running"); eq(job.status=="complete",false)
++        if mode=="safe" then
++            eq(job.committed,true); eq(active(c).fields.professionDetails.attempt.status,"unknown")
++            eq(c.fresh[character.guid..":2913"].fields.professionDetails,nil)
++        else eq(c.db.characters[character.guid],before); eq(c.fresh[character.guid..":2913"].fields.professionDetails,true) end
++        assert(deepEqual(last,active(c).fields.professionDetails.last)); eq(active(c).scannedAt,100)
++        pause(checkpoint,"U03 failure final fingerprint")
++    end
++end)
++case("U03 capture512 perks global count and32768 text fits caps reject whole report no truncation",function(checkpoint)
++    local env,s,c,scope=multiFixture(16,32); local job=finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    eq(job.status,"complete"); eq(job.steps,545); local r=active(c).fields.professionDetails.last.value
++    local count=0; for _,t in ipairs(r.trees) do for _,p in ipairs(t.paths) do count=count+#p.perks end end
++    eq(count,512)
++    pause(checkpoint,"U03 max perks captured")
++    env,s,c,scope=multiFixture(17,32); job=finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    eq(job.status,"failed"); eq(active(c).fields.professionDetails.last,nil)
++    env,s,c,scope=multiFixture(65,0); eq(Details.NewCaptureJob(env,c,scope).status,"blocked")
++    for _,overflow in ipairs({false,true}) do
++        env,s,c,scope=multiFixture(1,8)
++        env.C_ProfSpecs.GetDescriptionForPerk=function() return string.rep("x",4096) end
++        env.C_ProfSpecs.GetDescriptionForPath=function() return overflow and "x" or "" end
++        job=finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++        eq(job.status,overflow and "failed" or "complete")
++        if not overflow then eq(#active(c).fields.professionDetails.last.value.trees[1].paths[1].perks[8].description,4096) end
++        pause(checkpoint,"U03 byte cap capture")
++    end
++end)
++case("U03 source pointer root schema identity config and complete metadata stay guarded no writes",function(checkpoint)
++    for _,mode in ipairs({"root","map","char","profession","fields","schema","identity","config","source","rawstale","treegap","rawnode"}) do
++        local env,s,c,scope=fixture(); local before=c.db.characters[character.guid]
++        if mode=="rawstale" then active(c).fields.knowledgeRaw.last.observedAt=99
++        elseif mode=="treegap" then active(c).fields["tree:1124"].attempt.status="unknown"
++        elseif mode=="rawnode" then active(c).fields.knowledgeRaw.last.value.tabs[1].paths[106280].node.currentRank=10 end
++        local job=Details.NewCaptureJob(env,c,scope)
++        if mode=="rawstale" or mode=="treegap" or mode=="rawnode" then eq(job.status,"blocked")
++        else
++            job:Step()
++            if mode=="root" then c.db=C.Copy(c.db)
++            elseif mode=="map" then c.db.characters=C.Copy(c.db.characters)
++            elseif mode=="char" then c.db.characters[character.guid]=C.Copy(before)
++            elseif mode=="profession" then before.professions[2913]=C.Copy(before.professions[2913])
++            elseif mode=="fields" then active(c).fields.unspent.last.value=false
++            elseif mode=="schema" then c.db.schema=2
++            elseif mode=="identity" then s.info.profession=2
++            elseif mode=="config" then env.C_ProfSpecs.GetConfigIDForSkillLine=function() return 1002 end
++            elseif mode=="source" then s.info.sourceCounter=s.info.sourceCounter+1 end
++            local current=c.db.characters[character.guid]; finish(job,checkpoint); assert(job.status~="complete",mode)
++            eq(c.db.characters[character.guid],current); eq(active(c).fields.professionDetails,nil)
++        end
++        pause(checkpoint,"U03 source ownership guards")
++    end
++end)
++case("U03 nested repeated and hostile display wrappers preserve visible labels and conditions",function()
++    local nested="|cffaabbcc|Hspell:123|h|cff112233Visible|r |Ticon:12|tlabel|h|r\n\nOnly these crafts."
++    eq(Details.Plain(nested),"Visible label\n\nOnly these crafts.")
++    eq(Details.Plain("|Hspell:1|h|cffffffffLink|r|A:atlas:12|a|h"),"Link")
++    eq(Details.Plain(string.rep("|cffffffff|Hspell:1|hA|h|r",100)),string.rep("A",100))
++    eq(Details.Plain("|Hbad|hmissing |r |T:bad|t"),"||Hbad||hmissing ||r ||T:bad||t")
++    local hostile=string.rep("|cffffffff",64).."Visible\n\nConditions"..string.rep("|r",64)
++    local out=Details.Plain(hostile); assert(out:find("Visible\n\nConditions",1,true)); assert(#out<2*#hostile)
++    -- Every pipe that survives is escaped; no executable unknown markup remains.
++    eq((out:gsub("||","")):find("|",1,true),nil)
++    local r=reportFixture(); r.trees[1].paths[1].description=nested; local old=C.Copy(r)
++    local db=dbWith({professionDetails=r}); local c=NS.Collectors.New({},db)
++    local model=Details.Model(c,{guid=character.guid,id=2913,generation=1,archived=false})
++    assert(Details.Branch(model,1).body:find("Visible label",1,true)); assert(deepEqual(r,old))
++end)
++case("U03 own relative age unknown clocks current versus stale saved and returned model ownership",function(checkpoint)
++    local env,s,c,scope=fixture(); finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    local now=active(c).fields.professionDetails.last.observedAt
++    for _,sample in ipairs({{now,"0s ago"},{now+61,"1m ago"},{now+3601,"1h ago"},{now+86401,"1d ago"}}) do
++        s.at=sample[1]; assert(Details.Model(c,scope).status:find(sample[2],1,true))
++    end
++    for _,bad in ipairs({now-1,0/0,math.huge,false}) do
++        s.at=bad; assert(Details.Model(c,scope).status:find("age unknown",1,true))
++    end
++    c.Now=function() error("private clock") end
++    assert(Details.Model(c,scope).status:find("age unknown",1,true))
++    local before=C.Copy(active(c)); local model=Details.Model(c,scope)
++    model.branches[1].path.perks[1].description="changed"; assert(deepEqual(before,active(c)))
++    eq(model.branches[1].body,nil,"only selected body is formatted")
++    active(c).scannedAt=101; assert(Details.Model(c,scope).status:find("not current",1,true))
++end)
++case("U03 combat retirement refreshes saved status no progress leftovers or autoresume",function(checkpoint)
++    local env,s,c,scope=fixture(); widgets(env); finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    local view=Details.NewView(env,c); view:Open(scope); local saved=view.body:GetText()
++    view:Start(); local job=view.job; view.driver.scripts.OnUpdate(); assert(view.status:GetText():find("unit",1,true))
++    local callback=view.driver.scripts.OnUpdate; s.combat=true; callback()
++    eq(job.status,"cancelled"); eq(view.driver.scripts.OnUpdate,nil); eq(view.job,nil)
++    assert(view.status:GetText():find("cancelled",1,true)); assert(view.status:GetText():find("saved",1,true))
++    assert(not view.status:GetText():find("unit",1,true)); eq(view.body:GetText(),saved)
++    s.combat=false; callback(); eq(view.driver.scripts.OnUpdate,nil)
++end)
++case("U03 all required payload scalar native bounds reject nil nonnumbers fractions infinities NaN",function(checkpoint)
++    local sites={
++        {"version"},{"skillLineID"},{"configID"},{"sourceScanAt"},
++        {"trees",1,"id"},{"trees",1,"root"},{"trees",1,"purchased"},{"trees",1,"capacity"},
++        {"trees",1,"paths",1,"id"},{"trees",1,"paths",1,"purchased"},{"trees",1,"paths",1,"capacity"},
++        {"trees",1,"paths",1,"perks",1,"id"},{"trees",1,"paths",1,"perks",1,"rank"},{"trees",1,"paths",1,"perks",1,"state"},
++    }
++    for _,site in ipairs(sites) do
++        for _,mode in ipairs({"nil","false","string","fraction","negative","inf","nan"}) do
++            local r=reportFixture(); local parent=r
++            for i=1,#site-1 do parent=parent[site[i]] end
++            local v
++            if mode=="false" then v=false elseif mode=="string" then v="1" elseif mode=="fraction" then v=0.5
++            elseif mode=="negative" then v=-1 elseif mode=="inf" then v=math.huge elseif mode=="nan" then v=0/0 end
++            parent[site[#site]]=v
++            eq(C.ValidPayload("professionDetails",r,"observed"),false,table.concat(site,"/").." "..mode)
++        end
++        pause(checkpoint,"U03 required payload numbers")
++    end
++    local r=boundedReport(1,1); local t=r.trees[1]; local p=t.paths[1]; local k=p.perks[1]
++    t.id=2147483647; t.root=2147483647; p.id=2147483647; k.id=2147483647
++    p.capacity=2147483647; t.capacity=p.capacity; k.rank=p.capacity; r.configID=2147483647
++    eq(C.ValidPayload("professionDetails",r,"observed"),true,"inclusive native ID/rank/cap endpoints")
++    p.capacity=p.capacity+1; t.capacity=p.capacity; eq(C.ValidPayload("professionDetails",r,"observed"),false)
++    r=boundedReport(1,8); p=r.trees[1].paths[1]
++    for _,perk in ipairs(p.perks) do perk.description=string.rep("é",2048) end
++    eq(C.ValidPayload("professionDetails",r,"observed"),true,"32768 bytes not characters")
++    p.description="é"; eq(C.ValidPayload("professionDetails",r,"observed"),false)
++end)
++case("U03 capture getter boundaries context invalidation discard and completed jobs never resume",function(checkpoint)
++    for _,getter in ipairs({"GetDescriptionForPath","GetPerksForPath","GetUnlockRankForPerk","GetStateForPerk","GetDescriptionForPerk"}) do
++        for _,mode in ipairs({"closed","combat","foreign","revision","db"}) do
++            local env,s,c,scope=fixture(); local job=Details.NewCaptureJob(env,c,scope)
++            local old=env.C_ProfSpecs[getter]
++            env.C_ProfSpecs[getter]=function(...)
++                local v=old(...)
++                if mode=="closed" then s.shown=false elseif mode=="combat" then s.combat=true
++                elseif mode=="foreign" then s.linked=true elseif mode=="revision" then c.revision=c.revision+1
++                elseif mode=="db" then c.db=C.Copy(c.db) end
++                return v
++            end
++            local before=c.db.characters[character.guid]; finish(job,checkpoint)
++            eq(job.status,"discarded",getter..mode); eq(active(c).fields.professionDetails,nil)
++            s.shown=true; s.combat=false; s.linked=false
++            local step=job.steps; job:Step(); eq(job.steps,step)
++            if mode~="db" then eq(c.db.characters[character.guid],before) end
++            pause(checkpoint,"U03 native getter context boundary")
++        end
++    end
++end)
++case("U03 saved report uses own investment offline archive navigation filter reorder scope and zero gained wording",function(checkpoint)
++    local env,s,c,scope=fixture(); widgets(env); finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++    local ui=NS.Dashboard.New(env,c); ui:Toggle(); local cell=ui.widgets[1].cells[I.Profession]
++    cell.scripts.OnMouseDown(cell,"LeftButton"); local view=ui.details
++    local text=view.body:GetText(); local copy=C.Copy(c.db)
++    local another=C.Copy(copy.characters[character.guid]); another.name="Another"
++    c.db.characters["Player-Other"]=another; ui:Refresh()
++    ui.options.character="No matching character"; ui:Refresh(); eq(#ui.rows,0)
++    eq(view.scope.guid,scope.guid); eq(view.title:GetText(),"Calm Hands: 10/10"); eq(view.body:GetText(),text)
++    ui.options.character=nil; ui.options.sort="concentration"; ui:Refresh(); eq(view.scope.guid,scope.guid)
++    s.shown=false; c:Invalidate("closed"); ui:Refresh()
++    assert(view.status:GetText():find("Saved / stale",1,true)); eq(view.body:GetText(),text)
++    local calls=0; c.Context=function() calls=calls+1; error("offline context not allowed") end
++    c.db=copy; c.fresh={}; view:Open(scope); eq(calls,0)
++    eq(view.body:GetText(),text)
++    eq(C.Archive(c.db,scope.guid,scope.id,500,"fixture"),true); view:Refresh()
++    assert(view.status:GetText():find("unavailable",1,true)); eq(view.refresh.enabled,false)
++    scope.archived=true; view:Open(scope); eq(view.refresh.enabled,false); eq(view.body:GetText(),text)
++    local archived=c.db.characters[scope.guid].professions[scope.id].archives[1]
++    local r=archived.fields.professionDetails.last.value; local t=r.trees[1]; local p=t.paths[1]
++    p.purchased=0; t.purchased=0; p.perks[1].state=2; p.perks[1].rank=0
++    view:Refresh(); assert(view.body:GetText():find("0 invested",1,true))
++    assert(view.body:GetText():find("not a flat earned gain",1,true)); assert(view.body:GetText():find(PERK,1,true))
++    eq(calls,0)
++end)
++case("U03 locked native source unearned is observed not earned rank0 contradiction preserves unknown",function(checkpoint)
++    for _,state in ipairs({0,2}) do
++        local env,s,c,scope,n=fixture(); local g=active(c); local tree=g.fields["tree:1124"].last.value
++        local p=tree.paths[1]
++        p.purchased=0; p.locked=true; tree.purchased=0
++        n.ranksPurchased=0; n.currentRank=0; n.activeRank=0
++        n.activeEntry={entryID=131041,rank=0}; n.nextEntry={entryID=131041,rank=1}; n.entryIDsWithCommittedRanks={}
++        p.node=C.Copy(n); p.costs={{ID=3912,amount=1}}
++        tree.accountingEvidence.spent=0; tree.accountingEvidence.totalPurchased=0
++        tree.currencies={{traitCurrencyID=3902,quantity=0,spent=0},{traitCurrencyID=3912,quantity=1,spent=0}}
++        local tab=g.fields.knowledgeRaw.last.value.tabs[1]
++        tab.paths[106280]=C.Copy(p); tab.currencies=C.Copy(tree.currencies)
++        eq(C.Open(c.db),c.db)
++        env.C_ProfSpecs.GetStateForPerk=function() return state end
++        local job=finish(Details.NewCaptureJob(env,c,scope),checkpoint)
++        eq(job.status,state==0 and "complete" or "failed")
++        local last=active(c).fields.professionDetails.last
++        if state==0 then
++            eq(last.value.trees[1].paths[1].perks[1].state,0)
++            local body=Details.Branch(Details.Model(c,scope),1).body
++            assert(body:find("Locked",1,true)); assert(body:find("None earned",1,true)); assert(not body:find(PERK,1,true))
++        else eq(last,nil) end
++        pause(checkpoint,"U03 locked native source")
++    end
++end)
++end
++-- U03 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# CraftArmy/CraftArmy.toc baseSHA256=382d60d2cb7d6e36584ffaaf8d34ccb0fff9cf5c78bb4203f85268d105094e67 targetSHA256=1ca931e883435306225164f67a9e29081c509c7942cd2a7fccb33e5883fd01c8
+--- pre-U03/CraftArmy/CraftArmy.toc
++++ U03/CraftArmy/CraftArmy.toc
+@@ -8,6 +8,7 @@
+ Knowledge.lua
+ Collectors.lua
+ KnowledgeCheck.lua
++Details.lua
+ ViewModel.lua
+ Dashboard.lua
+ SelfTests.lua
+# tests/dashboard.lua baseSHA256=1a3585d83cb61171b0346bfa55319ce9fa1e8f3aea35275f3dae11ea351a8fa8 targetSHA256=04d063ada82cbd0e5273f3defbeb27bfc5de976ccc466dd9effefb4b1900f9e4
+--- pre-U03/tests/dashboard.lua
++++ U03/tests/dashboard.lua
+@@ -1,6 +1,6 @@
+ -- Only an already-installed Lua 5.1 runtime is approved for this standalone runner.
+ local namespace={}
+-for _,name in ipairs({"Core","Data","Knowledge","Collectors","KnowledgeCheck","ViewModel","Dashboard","SelfTests","Commands"}) do
++for _,name in ipairs({"Core","Data","Knowledge","Collectors","KnowledgeCheck","Details","ViewModel","Dashboard","SelfTests","Commands"}) do
+     local chunk,why=loadfile("CraftArmy/"..name..".lua")
+     assert(chunk,why); chunk("CraftArmy",namespace)
+ end
+# tools/check_dashboard.py baseSHA256=610a0c42aded6b470ea9b7149d986876f780171efd000921808c3b29b81669db targetSHA256=ca46ae2f95358e657d4dcec56b184effbf37c8a947b2a32610ddcf486784256c
+--- pre-U03/tools/check_dashboard.py
++++ U03/tools/check_dashboard.py
+@@ -9,7 +9,7 @@
+ ROOT = Path(__file__).resolve().parent.parent
+ ADDON = ROOT / "CraftArmy"
+ ORDER = [f"{name}.lua" for name in (
+-    "Core", "Data", "Knowledge", "Collectors", "KnowledgeCheck", "ViewModel", "Dashboard", "SelfTests", "Commands"
++    "Core", "Data", "Knowledge", "Collectors", "KnowledgeCheck", "Details", "ViewModel", "Dashboard", "SelfTests", "Commands"
+ )]
+ REQUIRED = [f"CraftArmy/{name}" for name in ORDER] + [
+     "CraftArmy/CraftArmy.toc", "tests/dashboard.lua", "tools/check_dashboard.py",
+@@ -52,7 +52,7 @@
+             if not target.is_relative_to(ADDON.resolve()) or not target.is_file():
+                 errors.append(f"unsafe/missing TOC entry: {line}")
+     if entries != ORDER:
+-        errors.append("TOC order must match exact nine-file manifest, no duplicates")
++        errors.append("TOC order must match exact ten-file manifest, no duplicates")
+     for key, value in {"Interface": "120105", "Version": "0.2.0-mvp", "SavedVariables": "CraftArmyDB"}.items():
+         if metadata.get(key) != value:
+             errors.append(f"expected {key}: {value}")
+@@ -105,6 +105,6 @@
+         print(f"FAIL: {failure}", file=sys.stderr)
+     if failures:
+         sys.exit(1)
+-    print("PASS: 15 required files; exact TOC/order/paths/metadata; isolated production SavedVariables; no dependencies")
++    print("PASS: 16 required files; exact TOC/order/paths/metadata; isolated production SavedVariables; no dependencies")
+     print(f"PASS: {docs} Markdown files inspected; {links} local links/anchors; eight diagnostic hashes unchanged")
+     print("Structural only: Lua syntax, fixtures, UI and target-client APIs NOT validated")
+# docs/dashboard/README.md baseSHA256=de69816d08d75e6109dceec476df48df1bb9666b5c94a99663aff668c45e0170 targetSHA256=9e6215be2edfa2e07969522ac57a1a0c2d371c986177925a1ca324f8ff752ece
+--- pre-U03/docs/dashboard/README.md
++++ U03/docs/dashboard/README.md
+@@ -1,6 +1,72 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
++
++## U03 — Inscription Details; independent review required before updating
++
++Click a row's **Profession** with the left mouse button to open cached branch details.
++Previous/Next branch shows each branch's own investment, the client's per-point rule
++with all conditions, and confirmed earned milestones with required ranks (including0).
++Text wraps and scrolls; opening or navigating the panel does **not** collect data.
++Other professions are unavailable/read-only; offline/archived snapshots are cached
++observations, never live alt inspection. If details are absent, known investment and
++an explicit “perks not observed” instruction appear, not a fake empty earned list.
++
++**Refresh details** is a separate explicit action on your own ready, unstaged Midnight
++Inscription. It uses one metadata/perk/verification unit per frame, then a bounded
++final scalar node check (at most64 paths) and atomic save in the commit frame. Ordinary
++dashboard scans do not read perk descriptions. Close, Escape, hide, restart or combat
++cancels capture without autoresume. Failures preserve the prior coherent report;
++pending/unavailable data never counts as earned. Details have their **own observation
++age** and saved/stale/archive status. Refreshing details does not advance dashboard
++Last Updated. Saved perks retain their own points, not later table investment.
++
++Recipe-like milestone wording, such as the rank0 Treatise text, remains an **earned
++milestone description**, not proof that a recipe is learned. Complete recipes,
++computed benefit totals, profitability and other professions are deferred.
++
++Local validation: **214/214 addon cases** (181 retained +33 new U03), **744 K6 /565 K7**
++supplement checks, diagnostic23/23 and both Python structural checks PASS. The full
++local workload is retained; missing native clocks remain “timings unavailable,” not
++zero or performance PASS. Injected fixtures do not establish target-client API behavior.
++
++**Implementation is not independent review, native acceptance or release.** Primary
++must compare the actual preserved baseline, obtain/persist independent review and
++confirm the frozen source before recommending an update. The initial197/1 local stop
++is retained in evidence; the final same-frame point check follows the settled primary
++amendment and keeps its rejecting regression. Native sample61 proves only sampled
++data feasibility; the new panel/capture/responsiveness/persistence are **NOT RUN**.
++
++### Combined U02 + U03 update and focused check — only after independent review
++
++Do not install from an unreviewed workspace. After primary clears that gate, quit WoW
++and back up all SavedVariables and the installed addon. Copy the **full current
++`CraftArmy` folder over the existing addon without deleting anything**, including new
++`Details.lua` and the updated TOC/Core/Dashboard/SelfTests. This also includes U02's
++Collectors/ViewModel changes if U02 was never installed. Preserve all SavedVariables,
++diagnostics and unrelated files. New SelfTests definitions are **not a request for a
++full native selftest rerun**. Older code rejects the new optional saved field: retain
++the **pre-update backup** for any coordinated revert; do not strip/reset the field or
++run old code on newly captured data. See [schema](schema.md#u03-optional-profession-details-report).
++
++Out of combat, open your own ready Midnight Inscription with no staged changes:
++
++1. Run **one normal `/ca scan`**, then `/ca`. Check U02 branch names/individual X/Y,
++   five silent normal value cells and Shift-before-hover diagnostics; native gear
++   tooltip behavior should remain unchanged.
++2. Left-click Profession, then **Refresh details** once. Navigate to Calm Hands and
++   compare the full per-point rule/conditions and earned rank0 milestone with native
++   UI. Do not assume sample point totals or use recipe text as learned confirmation.
++3. Report responsiveness, load/API errors, execution warnings or mismatches. Stop on
++   a real problem; preserve data. No synthetic timing/performance PASS is assumed.
++4. Close the profession and reopen cached Details without refreshing; then reload
++   and reopen the cached panel. Confirm the report/text/investment and its own saved
++   observation time survive without advancing dashboard Last Updated. Saved/stale
++   rather than fresh is expected after context loss/reload.
++
++No full `/ca selftest`, `/cad selftest`, large capture, `/ca knowledgecheck`, V01
++restart, timing chase, crafting, spending, recipe learning, gameplay action or reset
++is requested. These are focused user-run checks, not agent-run client validation.
+ 
+ ## U02 — named branch-only tree hover; five silent normal value cells
+ 
+@@ -28,26 +94,15 @@
+ Local checks pass: **181/181 addon cases** (149 retained +15 adapted U01 +17 new U02),
+ 744 K6/565 K7 checks, diagnostic23/23 and both Python structural checks. Injected fixtures
+ are not evidence of target-client API behavior, native timing or wrapped readability.
+-Primary exact comparison and independent static review passed (2026-11-08).
+-Quit WoW, back up SavedVariables, and update ONLY
+-`CraftArmy/Core.lua`, `CraftArmy/Collectors.lua`, `CraftArmy/ViewModel.lua`,
+-`CraftArmy/Dashboard.lua`, `CraftArmy/SelfTests.lua`. Preserve all other files/data and
+-diagnostics. SelfTests carries regressions, **not a request to rerun the full native suite**.
+-
+-After that reviewed update, out of combat open your own ready **Midnight Inscription**
+-with no pending specialization changes. Run one normal `/ca scan`, then `/ca`, to populate
+-optional names. Compare normal tree branch names/individual X/Y with the native UI;
+-confirm all branches appear and all five value cells are silent normally but accessible
+-with Shift-before-hover. Check unchanged native/third-party gear content and report any
+-unknown names, mismatch, error, warning or freeze. Stop on real problems; preserve data.
+-No full native selftest, large capture, `/ca knowledgecheck`, gameplay action, reset,
+-V01 restart or case88 timing chase is requested. U02 target-client name/API behavior,
+-wrapped readability and hover checks remain NOT RUN; broader T02 acceptance is incomplete.
++Primary U02 exact comparison and independent static review passed (2026-11-08).
++Its earlier five-file update instructions are superseded by the **combined U03
++review-gated folder update above**. U02 target-client name/API behavior, wrapped
++readability and hover checks remain NOT RUN; broader T02 acceptance is incomplete.
+ 
+ ## Current validation policy — approved 2026-11-07
+ 
+-**No further full `/ca selftest` timing chase is requested.** U02's update above is
+-review-gated; focused native label/hover checks follow review. The latest
++**No further full `/ca selftest` timing chase is requested.** The combined U03 update
++above is review-gated; focused native checks follow review. The latest
+ client result is **INCOMPLETE:87 passed/0failed of149**, case88unit2 at134.4ms,
+ wall77323.9ms. It is not a full PASS and does not show an assertion failure. Keep the
+ 100ms/10000-step safety limits and every existing test/workload unchanged.
+# docs/dashboard/schema.md baseSHA256=7f9e414fddc43c1533b5b05f0b09f39723e6f579f8506b3ab20b0162b22f23cb targetSHA256=7eb149b13002072a48426449b60b893e2d7a123404a721a9b1660fcb15bdd1c0
+--- pre-U03/docs/dashboard/schema.md
++++ U03/docs/dashboard/schema.md
+@@ -126,6 +126,7 @@
+ | `knowledgeRaw` | `{configID?, stagedStart?, stagedEnd?, stable, tabsComplete, tabs={...}}`; tabs contain `{id,name?,root?,paths={[pathID]={node?,children?,childrenComplete,unlockEntryID?,unlock?,costs,costRule,costReason}},coverageComplete,currencies}` |
+ | `tree:<tabID>` | `{id,name?,root,paths={...},complete=true,coverage,purchased,capacity}` only after whole-tree eligibility; `paths` retains node/entry/child/cost evidence plus exact per-path purchased/capacity |
+ | `environment` | `{version, locale?}`; each field's `build` is version + build from GetBuildInfo |
++| `professionDetails` (optional) | Version1 native Midnight Inscription report with its own `sourceScanAt`, coherent tree/path points and client path/perk descriptions; see U03 below |
+ 
+ Current production `costRule` remains unknown. The distinct K2 native policy below
+ can produce guarded observed aggregates without claiming verified-unit-spend.
+@@ -230,6 +231,76 @@
+ reopen and old-character alias retention. All96 definitions remain NOT RUN here;
+ independent re-review and user fixture/client validation are separate pending gates.
+ 
++## U03 optional profession Details report
++
++This remains **schema1**, with no DB reset, migration, version bump or implied
++eligibility for other professions. Old records without `professionDetails` remain
++valid. The field is permitted only in generation identity2913/773/profession13/
++expansion11, including archived generations. Core's registered validator applies on
++load and the unchanged atomic Apply path; no trusted payload bypass exists.
++
++```text
++{version=1, skillLineID=2913, configID, sourceScanAt, trees={
++  {id, name?, root, purchased, capacity, paths={
++    {id, name?, purchased, capacity, locked, description, perks={
++      {id, rank, state, isMajorPerk, description}, ...
++    }}, ...
++  }}, ...
++}}
++```
++
++- Dense arrays:1–8 trees, **64 paths total**,32 perks/path,512 perks total. Tree,
++  path and perk identities are unique within their respective kind across the report;
++  each tree root is one of its own paths. Preserve source traversal order.
++- Native IDs1..2147483647; purchased/ranks0..2147483647; capacity positive and within
++  that bound. Purchased<=capacity; each tree purchased/capacity equals the sum of its
++  individual paths. Locked paths have0 purchased. Perk rank<=path capacity; state is
++  **only0 Unearned or2 Earned**. Earned additionally requires unlocked and rank<=
++  purchased, including legitimate rank0. Pending1, absent or unrecognized state rejects
++  the whole capture; it never becomes an earned milestone or an empty earned list.
++- Optional names are nonblank1–256 bytes, no control characters/pipes. Descriptions
++  are unmodified client strings, at most4096 bytes each and **32768 description bytes
++  summed across the report**. Empty path description explicitly means no supplied
++  per-point rule; perk description must be nonblank. No clipping, prefix-as-complete,
++  parsed stat totals, inferred recipe IDs or recipe-learned checkmarks.
++- Existing generic depth20/50000 occurrence-expanded value/string/key/alias guards
++  still apply. A typed report can still fail assembled-DB budget preflight atomically.
++
++Explicit Refresh details alone starts capture, from complete same-scan native-rank-
++reconciled saved trees/index/config matching the selected own ready unstaged context.
++It privately projects only selected source descriptors, not the entire DB. Startup
++validates the DB once; ordinary guarded metadata/perk/verify steps do not Open or Copy
++the DB. They check source object/scope/serial/revision and finite time/context. At most
++one path metadata, one perk, or one path verification unit runs per frame. The amended
++terminal commit frame brackets **at most64 scalar GetNodeInfo checks** with full
++Context checks, using only cheap source/token guards between node calls, then calls
++unchanged Core.Apply without yielding. No descriptions/perks/entries/costs are reread
++in that batch. Step cap10000; no synchronous native drain or automatic resume.
++
++The sole observation is `professionDetails`. Its `attemptedAt`/successful `observedAt`
++is actual last-validated detail time, nondecreasing within the job and not earlier
++than the prior good report. **Apply.at stays sourceScanAt**, preserving generation
++`scannedAt` and dashboard Last Updated. Unrelated fields and session fresh flags are
++retained; only details freshness advances or clears on a coherent unknown attempt.
++Context/source/generation replacement, cancellation, invalid time or failed final
++point check writes nothing. A coherent API/data failure may record an unknown attempt
++after the same final point check, retaining the previous whole report/observation
++time. Unavailable final checks and Core.Apply budget/invalid-DB rejection do not write
++a replacement or partial snapshot. No unknown values are substituted with zero.
++
++The cached panel uses its report's own points, not newer tree points. It shows own
++relative observation age (unknown if clock unavailable), freshness, saved/not-current
++or archive status; a different current scan timestamp is explicitly not current.
++Reload/session invalidation never promotes saved details to fresh. Display-only markup
++cleaning leaves persisted wording, conditions, paragraph breaks and rank0 recipe-like
++milestone text unchanged. Recipe learning is not checked in this slice.
++
++**Downgrade caution:** previous addon code does not recognize this new optional field
++and fails closed on saved data containing it. Reverting code is not backward-compatible
++with newly captured data. Preserve the **pre-update SavedVariables backup** for a
++coordinated revert; do not strip the field, reset data, or put old code on new data as
++a workaround. Keep diagnostics and unrelated saved data intact.
++
+ ## Session freshness
+ 
+ Freshness is **not saved**. A guarded scan issues an in-memory token tied to current

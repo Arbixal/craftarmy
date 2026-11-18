@@ -1,0 +1,11 @@
+## Interface: 120105
+## Title: CraftArmy Diagnostics
+## Notes: Manual read-only Retail profession API evidence. Private local samples; no Auctionator mutations.
+## Author: CraftArmy
+## Version: 0.1.1-diagnostic
+## SavedVariables: CraftArmyDiagnosticsDB
+
+Core.lua
+Probes.lua
+SelfTests.lua
+Commands.lua

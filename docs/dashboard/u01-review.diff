@@ -1,0 +1,661 @@
+# Primary exact pre-U01 to delivered U01 comparison. No Git/staged scope; preserved workspace bytes.
+# CraftArmy/ViewModel.lua baseSHA256=a9116a628a7168ec6b3cf0a7ef9be4878350da8cf87a15b39b16ca600b7d38f0 targetSHA256=e29904163fd6e58d780348ae07d43e9b145d1a29fd4b756ff1698a00005f3abe
+--- pre-U01/CraftArmy/ViewModel.lua
++++ U01/CraftArmy/ViewModel.lua
+@@ -137,15 +137,121 @@
+     return lines
+ end
+ 
++-- Player summaries are separate from the unchanged diagnostic evidence above.
++local function freshness(state,now,archived)
++    local age=V.Age(now,state.observedAt)
++    if archived and not state.known then return "Archived snapshot; not observed." end
++    if archived then return "Archived snapshot; last observed "..age.." ago." end
++    if not state.known then return "Not observed." end
++    if state.stale then return "Stale: refresh unavailable; last observed "..age.." ago." end
++    if state.fresh then return "Current observation; observed "..age.." ago." end
++    return "Last observed snapshot; observed "..age.." ago."
++end
++local function bounded(lines)
++    -- Reserve the final line for Dashboard's opt-in hint. Never trim source evidence.
++    if #lines>15 then
++        local count=#lines-14
++        for i=#lines,15,-1 do lines[i]=nil end
++        lines[15]=count.." more details available on Shift-hover."
++    end
++    return lines
++end
++local function statSummary(tool)
++    local lines={"Tool stats"}
++    if tool.empty or tool.state.lastStatus=="not_applicable" then
++        lines[#lines+1]="No tool; stats not applicable."
++    elseif not tool.value or tool.value.exists~=true then
++        lines[#lines+1]="Tool stats not observed."
++    else
++        local keys={}
++        for key in pairs(tool.value.stats or {}) do keys[#keys+1]=key end
++        table.sort(keys)
++        local amounts={}
++        for _,key in ipairs(keys) do
++            local map=D.statNames[key]
++            amounts[#amounts+1]=(map and map[2] or "Unknown stat")..": "..str(tool.value.stats[key])
++        end
++        if #amounts>0 then lines[#lines+1]=table.concat(amounts,"; ") end
++        if #keys==0 then lines[#lines+1]="Tool stats not observed." end
++        lines[#lines+1]="Observed totals; base/enchant split unknown."
++    end
++    return lines
++end
++local function enchantSummary(tool)
++    local lines={"Tool enchant"}
++    local value=tool.value
++    if tool.empty or tool.state.lastStatus=="not_applicable" then
++        lines[#lines+1]="No tool; enchant not applicable."
++    elseif not value or value.exists~=true or value.metadataReady==false then
++        lines[#lines+1]="Enchant unknown; item data unavailable."
++    else
++        local enchant=value.enchant
++        if enchant and enchant.status=="observed" and enchant.present==false then
++            lines[#lines+1]="No enchant (confirmed)."
++        elseif enchant and enchant.status=="observed" and enchant.present==true then
++            local category=D.statCategories[enchant.category]
++            lines[#lines+1]="Enchanted: "..(category and category[2] or "Unknown stat").."; amount/rank unknown."
++        else lines[#lines+1]="Enchant unknown; not observed." end
++        local count=0
++        for _,line in ipairs(value.enchantLines or {}) do
++            for _,key in ipairs({"leftText","rightText"}) do
++                local text=line[key]
++                if type(text)=="string" and text:match("%S") then
++                    count=count+1
++                    if count<=2 then lines[#lines+1]=text end
++                end
++            end
++        end
++        if count>2 then lines[#lines+1]=(count-2).." more enchant text lines on Shift-hover." end
++    end
++    return lines
++end
++local function treeSummary(tree,value,now,archived)
++    local known=value and C.Integer(value.purchased) and C.Integer(value.capacity)
++    local lines={tree.name==tostring(tree.id) and "Knowledge tree" or tree.name,known and ("Purchased/capacity: "..value.purchased.."/"..value.capacity) or
++        "Total unknown; complete verified observations required.",freshness(tree.state,now,archived)}
++    if value then
++        if value.accountingPolicy=="native-rank-reconciled-v1" then
++            lines[#lines+1]="Future point costs are unverified."
++        end
++        local byID,seen={},{}
++        for _,p in ipairs(value.paths or {}) do byID[p.id]=p end
++        local count,missing=0,false
++        local function visit(id,label,depth)
++            if seen[id] or depth>64 then return end
++            seen[id]=true
++            local p=byID[id]
++            if not p then missing=true; return end
++            count=count+1
++            if count<=6 then
++                local availability="availability unknown"
++                if p.locked==true or (p.node and p.node.isAvailable==false) then availability="locked"
++                elseif p.node and p.node.isAvailable==true then availability="available" end
++                local points=C.Integer(p.purchased) and C.Integer(p.capacity) and
++                    (p.purchased.."/"..p.capacity) or "points unknown"
++                lines[#lines+1]=label..": "..points.."; "..availability
++            end
++            for n,child in ipairs(p.children or {}) do
++                visit(child,depth==0 and ("Branch "..n) or (label.."."..n),depth+1)
++            end
++        end
++        visit(value.root,"Main branch",0)
++        if count>6 then lines[#lines+1]=(count-6).." more branches on Shift-hover." end
++        if missing or count==0 then lines[#lines+1]="Some branch observations are missing." end
++    end
++    return bounded(lines)
++end
++
+ function V.Row(guid,c,id,g,session,now,archived)
+     if archived then session=nil end
+     local row={guid=guid,id=id,generation=g.generation,archived=archived==true, name=c.name,realm=c.realm,
+         profession=g.identity.name or D.families[g.identity.profession] or tostring(id),professionFamily=g.identity.profession,
+         cells={},warnings={},trees={},known=0}
+     row.key=guid..":"..id..":"..g.generation
+-    local details={}
++    local details,states={},{}
+     local function field(key)
+         local v,s=V.Field(g,key,session)
++        states[key]=s
+         if s.known then row.known=row.known+1 end
+         details[#details+1]=s.text
+         return v,s
+@@ -204,6 +310,7 @@
+         end
+         tree.tooltip=treeDetail(value,raw,state.observedAt,state)
+         table.insert(tree.tooltip,1,tree.name)
++        tree.summaryTooltip=treeSummary(tree,value,now,archived)
+         row.trees[#row.trees+1]=tree
+     end
+     if progressKnown then row.progressionIncomplete=incomplete end
+@@ -238,6 +345,54 @@
+     end
+     row.priority=row.known>0 and 3 or 4
+     for _,w in ipairs(row.warnings) do row.priority=math.min(row.priority,w.fresh and 1 or 2) end
++    row.cellTooltips={}
++    local summaries=row.cellTooltips
++    local identity={row.name,row.realm,row.profession}
++    summaries[I.Name]=identity; summaries[I.Realm]=identity; summaries[I.Profession]=identity
++    summaries[I.Skill]={"Profession skill: "..(skill and (str(skill.skillLevel).."/"..str(skill.maxSkillLevel)) or "Not observed"),
++        "Skill modifier: "..str(skill and skill.skillModifier),freshness(ss,now,archived)}
++    for _,entry in ipairs({{I.Concentration,"Concentration",conc,cs},{I.Moxie,"Moxie",mox,ms}}) do
++        local value=entry[3]
++        summaries[entry[1]]={entry[2]..": "..(value and (str(value.quantity)..
++            (value.maxQuantity~=nil and ("/"..str(value.maxQuantity)) or "")) or "Not observed"),freshness(entry[4],now,archived)}
++    end
++    summaries[I.Unspent]={"Unspent knowledge: "..(us.known and str(unspent) or "Not observed"),freshness(us,now,archived)}
++    summaries[I.LastUpdated]={"Last scan: "..row.lastUpdated.." ago.",
++        archived and "Archived snapshot." or (stale and "Stale snapshot; refresh unavailable." or
++        (hasFresh and "Current guarded observations." or "Saved snapshot; not a current read.")),
++        "Fields may have independent observation times."}
++    summaries[I.Knowledge]={"Knowledge trees: "..#row.trees,"Unspent knowledge is shown separately.",
++        freshness(states.knowledgeIndex,now,archived)}
++    if #row.trees==0 then summaries[I.Knowledge][#summaries[I.Knowledge]+1]="Tree observations unavailable." end
++    for _,tree in ipairs(row.trees) do
++        summaries[I.Knowledge][#summaries[I.Knowledge]+1]=tree.summaryTooltip[1]..": "..
++            tree.summaryTooltip[2].."; "..freshness(tree.state,now,archived)
++    end
++    for _,role in ipairs(V.roles) do
++        local gear=row.gear[role]
++        local lines={({accessory1="Accessory #1",accessory2="Accessory #2",tool="Tool"})[role],freshness(gear.state,now,archived)}
++        if gear.state.lastStatus=="not_applicable" then lines[#lines+1]="Not applicable."
++        elseif gear.empty then lines[#lines+1]="Empty slot (confirmed)."
++        elseif gear.exists~=true then lines[#lines+1]="Item unknown; data unavailable."
++        else
++            lines[#lines+1]="Rarity: "..(({[0]="Poor",[1]="Common",[2]="Uncommon",[3]="Rare",[4]="Epic",[5]="Legendary"})[gear.rarity] or "Unknown")
++            lines[#lines+1]="Crafted quality: "..(C.Integer(gear.rank,1) and gear.rank<=5 and gear.rank or "Unknown")
++        end
++        if role=="tool" then
++            summaries[I.Stat]=statSummary(gear); summaries[I.Enchant]=enchantSummary(gear)
++            for _,col in ipairs({I.Stat,I.Enchant}) do
++                summaries[col][#summaries[col]+1]=freshness(gear.state,now,archived)
++                for n=2,#summaries[col]-1 do lines[#lines+1]=summaries[col][n] end
++            end
++        end
++        gear.summaryTooltip=bounded(lines)
++    end
++    for _,w in ipairs(row.warnings) do
++        local col=({Moxie=I.Moxie,Concentration=I.Concentration,Progression=I.Skill,["Missing enchant"]=I.Enchant})[w.category]
++        if col then summaries[col][#summaries[col]+1]="Attention: "..w.label end
++        if w.category=="Missing enchant" then tool.summaryTooltip[#tool.summaryTooltip+1]="Attention: "..w.label end
++    end
++    for _,lines in pairs(summaries) do bounded(lines) end
+     return row
+ end
+ 
+# CraftArmy/Dashboard.lua baseSHA256=7ed773909586f1df96cc7477715d42f4688f89aafe847ab973e1db6236f60133 targetSHA256=1a23bb8e7486712d388ec2ee2080107559544ba6daa32c62446eb4294132b8f0
+--- pre-U01/CraftArmy/Dashboard.lua
++++ U01/CraftArmy/Dashboard.lua
+@@ -70,6 +70,18 @@
+         for _,line in ipairs(lines or {}) do tip:AddLine(Dashboard.PlainTooltip(line),1,1,1,true) end
+         tip:Show()
+     end
++    local function diagnostics()
++        if type(env.IsShiftKeyDown)~="function" then return false end
++        local ok,down=pcall(env.IsShiftKeyDown)
++        return ok and down==true
++    end
++    local function focusedTooltip(widget,summary,detail,link)
++        if diagnostics() then tooltip(widget,detail,link); return end
++        local lines={}
++        for _,line in ipairs(summary or {}) do lines[#lines+1]=line end
++        if detail and #detail>0 then lines[#lines+1]="Shift-hover for diagnostics." end
++        tooltip(widget,lines,link)
++    end
+     local function button(parent,label,width,fn)
+         local b=env.CreateFrame("Button",nil,parent,"UIPanelButtonTemplate")
+         b:SetSize(width,22); b:SetText(label); b:SetScript("OnClick",fn); return b
+@@ -190,7 +202,7 @@
+         self.statusArea:SetScript("OnEnter",function(w)
+             local lines={Dashboard.StatusText(collector.reason,collector.blockReason),"Raw status: "..(collector.reason==nil and "" or tostring(collector.reason))}
+             if collector.blockReason~=nil then lines[#lines+1]="Blocked: "..tostring(collector.blockReason) end
+-            tooltip(w,lines)
++            focusedTooltip(w,{Dashboard.StatusText(collector.reason,collector.blockReason)},lines)
+         end)
+         self.statusArea:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+         local refresh=button(frame,"Refresh",76,function() collector:Request("Manual refresh") end)
+@@ -264,7 +276,8 @@
+                     local role=roleColumns[col]
+                     local gear=role and r.gear[role] or ((col==I.Stat or col==I.Enchant) and r.gear.tool)
+                     local lines=gear and gear.tooltip or {r.cells[I.Name].."-"..r.cells[I.Realm],r.cells[I.Profession],unpack(r.tooltip)}
+-                    tooltip(widget,lines,gear and gear.link)
++                    local summary=role and gear.summaryTooltip or r.cellTooltips[col]
++                    focusedTooltip(widget,summary,lines,role and gear.link)
+                 end)
+                 cell:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+                 -- Propagate selection without intercepting tooltip hover.
+@@ -279,7 +292,9 @@
+                 b.background=b:CreateTexture(nil,"BACKGROUND"); b.background:SetAllPoints(); b.background:SetColorTexture(0.15,0.15,0.15,1)
+                 b.label=text(b,53); b.label:SetAllPoints(); b.label:SetJustifyH("CENTER")
+                 b:EnableMouse(true)
+-                b:SetScript("OnEnter",function(widget) if b.tree then tooltip(widget,b.tree.tooltip) end end)
++                b:SetScript("OnEnter",function(widget)
++                    if b.tree then focusedTooltip(widget,b.tree.summaryTooltip,b.tree.tooltip) end
++                end)
+                 b:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
+                 w.bars[n]=b
+             end
+# CraftArmy/SelfTests.lua baseSHA256=c2d0b1f8cb27c92cc458272c209f363088aa8a59e964b9613acaed16932f23d3 targetSHA256=ef1e484eee884c4d8d60bd50e4b1c44328b3d45b2224f7ebd75cd607bbd971ca
+--- pre-U01/CraftArmy/SelfTests.lua
++++ U01/CraftArmy/SelfTests.lua
+@@ -1375,6 +1375,7 @@
+ end)
+ case("R5 friendly status keeps raw unknown error block reasons and does not mutate collector",function(checkpoint)
+     local ui,env,collector=dashboardRows(1,checkpoint)
++    env.IsShiftKeyDown=function() return true end -- U01 legacy diagnostic fixture
+     for _,sample in ipairs({
+         {raw="TRADE_SKILL_CLOSE",part="showing saved snapshots"},
+         {raw="TRADE_SKILL_DATA_SOURCE_CHANGING",part="wait for your own ready profession"},
+@@ -1412,6 +1413,7 @@
+ end)
+ case("R5 native item tooltip plus clean appended evidence and full identities survive rebuild",function()
+     local env=fixtureAPI(); mockWidgets(env)
++    env.IsShiftKeyDown=function() return true end -- U01 legacy diagnostic fixture
+     local values=payloadFixtures()
+     values.tool.link="|cffa335ee|Hitem:90020:8005:0:0|h[Fixture tool]|h|r"
+     values.tool.enchant={status="observed",present=true,id=8005,category="Multicraft"}
+@@ -1562,6 +1564,7 @@
+     for _,mode in ipairs({"known","absent","empty","notApplicable","unloaded","unknown","unmapped"}) do
+         pause(checkpoint,"R6 enchant variant")
+         local env=fixtureAPI(); mockWidgets(env); local values=payloadFixtures()
++        env.IsShiftKeyDown=function() return true end -- U01 legacy diagnostic fixture
+         if mode=="known" then values.tool.enchant={status="observed",present=true,id=8005,category="Multicraft"}; values.tool.link="item:90020:8005:0"
+         elseif mode=="empty" then values.tool={slot=20,role="tool",exists=false,metadataReady=false}
+         elseif mode=="unloaded" then values.tool={slot=20,role="tool",exists=true,metadataReady=false,itemID=90020}
+@@ -4303,6 +4306,320 @@
+ end)
+ end
+ 
++-- U01 BEGIN: additive focused-hover regressions; old cases/runner stay intact.
++do
++local V=NS.ViewModel
++local function uiFixture(values)
++    local env,state=fixtureAPI(); mockWidgets(env)
++    local db,g=dbWith(values or payloadFixtures())
++    local collector=NS.Collectors.New(env,db)
++    local ui=NS.Dashboard.New(env,collector); ui:Toggle()
++    return ui,env,collector,g,state
++end
++local function contains(text,part) assert(text:find(part,1,true),"missing hover text: "..part.." in "..text) end
++local function excludes(text,part) assert(not text:find(part,1,true),"unexpected hover text: "..part.." in "..text) end
++local function hover(ui,env,target,shift)
++    env.IsShiftKeyDown=function() return shift end
++    local widget=type(target)=="number" and ui.widgets[1].cells[target] or target
++    widget.scripts.OnEnter(widget)
++    local tip=env.GameTooltip
++    local first=tip.nativeLink and 3 or 1
++    local text=table.concat(tip.lines,"\n",first)
++    if not shift then
++        assert(#tip.lines-first+1<=16,"default addon line budget")
++        for _,part in ipairs({"Raw status:","Generation ","Source pin:","Slot 20","key ITEM_","Shared currency ",
++            "attempted ","scan timestamp ","Path 106","TRADE_SKILL_CLOSE"}) do excludes(text,part) end
++    end
++    return text,widget
++end
++local function stableGraph(root)
++    local records={}
++    local function visit(t)
++        if type(t)~="table" or records[t] then return end
++        local saved={}; records[t]=saved
++        for k,v in pairs(t) do saved[k]=v; visit(v) end
++    end
++    visit(root)
++    return function()
++        for t,saved in pairs(records) do
++            for k,v in pairs(saved) do eq(t[k],v,"source value/reference unchanged") end
++            for k in pairs(t) do assert(saved[k]~=nil,"no source key added") end
++        end
++    end
++end
++case("U01 status concise default raw Shift and unknown blocking reasons stay truthful",function()
++    local ui,env,c=uiFixture()
++    for _,sample in ipairs({{raw="TRADE_SKILL_CLOSE",friendly="Profession closed"},
++        {raw="unsupported: readiness API missing",friendly="unsupported: readiness API missing"},
++        {raw="Guarded snapshot collected; knowledge cost eligibility pending evidence.",block="Future schema: writes disabled",friendly="Future schema: writes disabled"}}) do
++        c.reason=sample.raw; c.blockReason=sample.block
++        local verify=stableGraph({c.db,c.fresh})
++        local normal=hover(ui,env,ui.statusArea,false)
++        contains(normal,sample.friendly); contains(normal,"Shift-hover for diagnostics.")
++        eq(#env.GameTooltip.lines,2); excludes(normal,"Blocked:")
++        local diagnostic=hover(ui,env,ui.statusArea,true)
++        contains(diagnostic,"Raw status: "..sample.raw)
++        if sample.block then contains(diagnostic,"Blocked: "..sample.block) end
++        eq(c.reason,sample.raw); eq(c.blockReason,sample.block); verify()
++    end
++end)
++case("U01 full identity default and original row diagnostic Shift are separate",function()
++    local ui,env,c=uiFixture()
++    local char=c.db.characters[character.guid]
++    char.name=string.rep("LongCharacter",20); char.realm=string.rep("LongRealm",20)
++    char.professions[2913].active.identity.name=string.rep("LongProfession ",20)
++    ui:Refresh(); local r=ui.rows[1]; local verify=stableGraph({c.db,c.fresh,r.tooltip})
++    for _,col in ipairs({I.Name,I.Realm,I.Profession}) do
++        local normal=hover(ui,env,col,false)
++        eq(env.GameTooltip.lines[1],r.name); eq(env.GameTooltip.lines[2],r.realm); eq(env.GameTooltip.lines[3],r.profession)
++        excludes(normal,"concentration:"); excludes(normal,"Skill modifier:")
++        local diagnostic=hover(ui,env,col,true)
++        contains(diagnostic,r.name.."-"..r.realm); contains(diagnostic,"Generation 1; scan timestamp 10")
++        contains(diagnostic,"unspent: observed; attempted 10; observed 10")
++        eq(env.GameTooltip.nativeLink,nil)
++    end
++    verify()
++end)
++case("U01 numeric fields show own observed amounts modifier cap freshness and warning only",function()
++    local values=payloadFixtures(); values.skill={skillLevel=37,maxSkillLevel=100,skillModifier=40}
++    values.concentration={id=50001,quantity=950,maxQuantity=1000}; values.moxie={id=3261,quantity=601}
++    local ui,env,c,g=uiFixture(values)
++    c.fresh={[character.guid..":2913"]={generation=g.generation,fields={skill=true,concentration=true,moxie=true,unspent=true}}}
++    ui:Refresh(); local verify=stableGraph({c.db,c.fresh})
++    for _,sample in ipairs({{I.Skill,"37/100","Skill modifier: 40","Progression"},
++        {I.Concentration,"Concentration: 950/1000",nil,"Concentration"},
++        {I.Moxie,"Moxie: 601",nil,"Moxie"},{I.Unspent,"Unspent knowledge: 0"}}) do
++        local normal=hover(ui,env,sample[1],false)
++        contains(normal,sample[2]); if sample[3] then contains(normal,sample[3]) end
++        contains(normal,"Current observation; observed 1m ago.")
++        if sample[4] then contains(normal,"Attention: confirmed "..sample[4]) end
++        for _,other in ipairs({"Moxie: 601","Concentration: 950/1000","Profession skill: 37/100","Unspent knowledge: 0"}) do
++            if not other:find(sample[2],1,true) then excludes(normal,other) end
++        end
++        local diagnostic=hover(ui,env,sample[1],true)
++        contains(diagnostic,"observed 10; fresh guarded read"); contains(diagnostic,"scan timestamp 10")
++    end
++    local normal=hover(ui,env,I.LastUpdated,false); contains(normal,"Last scan: 1m ago."); contains(normal,"Current guarded observations.")
++    contains(hover(ui,env,I.LastUpdated,true),"scan timestamp 10"); verify()
++end)
++case("U01 independent stale saved archived field ages never use attempt or retirement times",function()
++    local values=payloadFixtures(); values.moxie.quantity=601
++    local ui,env,c,_,s=uiFixture(values)
++    assert(C.Apply(c.db,character,identity,{unspent=C.Observation("observed",0,70,"fixture")},70,"fixture"))
++    assert(C.Apply(c.db,character,identity,{moxie=C.Observation("error",nil,80,"fixture","PRIVATE_RAW_FAILURE")},80,"fixture"))
++    s.at=140; c.fresh={[character.guid..":2913"]={generation=1,fields={unspent=true,moxie=true}}}; ui:Refresh()
++    local text=hover(ui,env,I.Moxie,false)
++    contains(text,"Stale: refresh unavailable; last observed 2m ago."); contains(text,"last observed Moxie")
++    excludes(text,"PRIVATE_RAW_FAILURE"); excludes(text,"Current")
++    contains(hover(ui,env,I.Unspent,false),"Current observation; observed 1m ago.")
++    text=hover(ui,env,I.LastUpdated,false); contains(text,"Last scan: 1m ago."); contains(text,"Stale snapshot")
++    text=hover(ui,env,I.Moxie,true); contains(text,"attempted 80; observed 10"); contains(text,"PRIVATE_RAW_FAILURE")
++    c.fresh={}; ui:Refresh(); contains(hover(ui,env,I.Unspent,false),"Last observed snapshot")
++    assert(C.Archive(c.db,character.guid,2913,130,"fixture retirement")); ui.options.archived=true; ui:Refresh()
++    local verify=stableGraph({c.db,c.fresh})
++    text=hover(ui,env,I.Moxie,false); contains(text,"Archived snapshot; last observed 2m ago."); excludes(text,"Attention:")
++    text=hover(ui,env,I.LastUpdated,false); contains(text,"Last scan: 1m ago."); contains(text,"Archived snapshot.")
++    contains(hover(ui,env,I.Accessory2,false),"Archived snapshot; not observed.")
++    contains(hover(ui,env,I.LastUpdated,true),"Archived 130: fixture retirement"); eq(#ui.rows[1].warnings,0); verify()
++end)
++case("U01 unknown zero confirmed empty and independent quality rarity remain distinct",function()
++    local ui,env=uiFixture({unspent=0,concentration={id=50001,quantity=0},moxie={id=3261,quantity=0},
++        accessory1={slot=21,role="accessory1",exists=false,metadataReady=false},
++        tool={slot=20,role="tool",exists=true,metadataReady=false,itemID=90020,rank=5}})
++    contains(hover(ui,env,I.Unspent,false),"Unspent knowledge: 0")
++    contains(hover(ui,env,I.Concentration,false),"Concentration: 0"); excludes(hover(ui,env,I.Concentration,false),"0/0")
++    contains(hover(ui,env,I.Skill,false),"Not observed")
++    contains(hover(ui,env,I.Accessory1,false),"Empty slot (confirmed)")
++    contains(hover(ui,env,I.Accessory2,false),"Item unknown")
++    local tool=hover(ui,env,I.Tool,false); contains(tool,"Rarity: Unknown"); contains(tool,"Crafted quality: 5")
++    contains(hover(ui,env,I.Enchant,false),"Enchant unknown; item data unavailable.")
++    contains(hover(ui,env,I.Knowledge,false),"Tree observations unavailable.")
++    for _,col in ipairs({I.Skill,I.Accessory1,I.Accessory2,I.Tool,I.Enchant,I.Concentration,I.Moxie,I.Unspent,I.Knowledge}) do
++        assert(#hover(ui,env,col,true)>0)
++    end
++    local unknown,otherEnv=uiFixture({})
++    contains(hover(unknown,otherEnv,I.Unspent,false),"Not observed."); excludes(hover(unknown,otherEnv,I.Unspent,false),"knowledge: 0")
++end)
++case("U01 native gear only preserves third party content order hide and clears stale links",function()
++    local values=payloadFixtures()
++    for _,role in ipairs({"accessory1","accessory2"}) do
++        values[role]=C.Copy(values.tool); values[role].role=role; values[role].slot=role=="accessory1" and 21 or 22
++    end
++    local ui,env=uiFixture(values); local tip=env.GameTooltip
++    for _,shift in ipairs({false,true}) do
++        for _,col in ipairs({I.Accessory1,I.Accessory2,I.Tool}) do
++            tip.calls={}; local text=hover(ui,env,col,shift)
++            if not shift then contains(text,"Rarity: Rare"); contains(text,"Crafted quality: 5") end
++            eq(tip.calls[1],"clear"); eq(tip.calls[2],"owner"); eq(tip.calls[3],"hyperlink"); eq(tip.calls[4],"append")
++            eq(tip.nativeLink,values.tool.link); eq(tip.lines[2],"Third-party BIS |A:Native-BIS:12:12|a")
++            for _,nextCol in ipairs({I.Stat,I.Enchant,I.Name}) do
++                tip.calls={}; local _,widget=hover(ui,env,nextCol,shift)
++                eq(tip.nativeLink,nil); eq(tip.calls[1],"clear"); eq(tip.calls[2],"owner"); eq(tip.calls[3],"append")
++                eq(tip.owner,widget); widget.scripts.OnLeave(widget); eq(tip.shown,false)
++            end
++        end
++        hover(ui,env,I.Tool,shift); local header=ui.headers[I.Accessory1]; header.scripts.OnEnter(header)
++        eq(tip.nativeLink,nil); eq(#tip.lines,1); eq(tip.lines[1],"Accessory #1"); header.scripts.OnLeave(header); eq(tip.shown,false)
++    end
++end)
++case("U01 tool stats full names amounts unknown keys and enchant observed text attribution",function()
++    local values=payloadFixtures()
++    values.tool.stats={ITEM_MOD_MULTICRAFT_SHORT=152,ITEM_MOD_RESOURCEFULNESS_SHORT=12,ITEM_MOD_PRIVATE_STAT=7}
++    values.tool.enchant={status="observed",present=true,id=8005,category="Multicraft"}
++    values.tool.enchantLines={{leftText="Enchanted: |A:Rank-3:16|a Haranir",rightText=" "},
++        {leftText="Observed second text",rightText="Observed third text"},{leftText="Observed fourth text"}}
++    local ui,env=uiFixture(values)
++    for _,col in ipairs({I.Tool,I.Stat}) do
++        local text=hover(ui,env,col,false)
++        contains(text,"Multicraft: 152"); contains(text,"Resourcefulness: 12"); contains(text,"Unknown stat: 7")
++        contains(text,"Observed totals; base/enchant split unknown."); excludes(text,"ITEM_MOD_PRIVATE_STAT")
++        contains(hover(ui,env,col,true),"key ITEM_MOD_PRIVATE_STAT")
++    end
++    for _,col in ipairs({I.Tool,I.Enchant}) do
++        local text=hover(ui,env,col,false)
++        contains(text,"Enchanted: Multicraft; amount/rank unknown."); contains(text,"Enchanted:  Haranir")
++        contains(text,"Observed second text"); contains(text,"2 more enchant text lines on Shift-hover.")
++        excludes(text,"Observed third text"); excludes(text,"8005"); excludes(text,"Rank-3")
++        text=hover(ui,env,col,true); contains(text,"ID 8005"); contains(text,"Observed fourth text"); contains(text,"observed 10")
++    end
++end)
++case("U01 enchant states unknown unmapped absent no tool never infer amounts or ranks",function(checkpoint)
++    for _,mode in ipairs({"known","absent","empty","notApplicable","unloaded","unknown","unmapped"}) do
++        pause(checkpoint,"U01 focused enchant variant")
++        local values=payloadFixtures()
++        if mode=="known" then values.tool.enchant={status="observed",present=true,id=8005,category="Multicraft"}
++        elseif mode=="empty" then values.tool={slot=20,role="tool",exists=false,metadataReady=false}
++        elseif mode=="unloaded" then values.tool.metadataReady=false
++        elseif mode=="unknown" then values.tool.enchant={status="unknown",reason="PRIVATE_ENCHANT_REASON"}
++        elseif mode=="unmapped" then values.tool.enchant={status="observed",present=true,id=9999} end
++        local ui,env,c=uiFixture(values)
++        if mode=="notApplicable" then assert(C.Apply(c.db,character,identity,{tool=C.Observation("not_applicable",nil,20,"fixture")},20,"fixture")); ui:Refresh() end
++        local text=hover(ui,env,I.Enchant,false)
++        if mode=="known" then contains(text,"Enchanted: Multicraft; amount/rank unknown.")
++        elseif mode=="absent" then contains(text,"No enchant (confirmed)."); contains(text,"Attention: last observed Missing enchant")
++        elseif mode=="empty" or mode=="notApplicable" then contains(text,"No tool; enchant not applicable."); excludes(text,"Attention:")
++        elseif mode=="unmapped" then contains(text,"Enchanted: Unknown stat; amount/rank unknown."); excludes(text,"9999")
++        else contains(text,"Enchant unknown"); excludes(text,"No enchant (confirmed)."); excludes(text,"PRIVATE_ENCHANT_REASON") end
++        contains(hover(ui,env,I.Enchant,true),"tool:")
++    end
++end)
++case("U01 native tree concise ordinal six branch limit locked capacity caveat full Shift evidence",function()
++    local env,_,_,c=k2Fixture(); mockWidgets(env); assert(c:Scan())
++    local ui=NS.Dashboard.New(env,c); ui:Toggle(); local verify=stableGraph({c.db,c.fresh})
++    for n,tree in ipairs(ui.rows[1].trees) do
++        local bar=ui.widgets[1].bars[n]
++        local normal=hover(ui,env,bar,false)
++        contains(normal,tree.name); contains(normal,"Purchased/capacity: "..tree.purchased.."/"..tree.capacity)
++        contains(normal,"Future point costs are unverified."); contains(normal,"Main branch:")
++        local count=0
++        for _,line in ipairs(env.GameTooltip.lines) do if line:match("^Main branch:") or line:match("^Branch %d") then count=count+1 end end
++        eq(count,math.min(6,#c.db.characters[character.guid].professions[2913].active.fields["tree:"..tree.id].last.value.paths))
++        if n==1 then
++            contains(normal,"Branch 1.1: 0/30; locked"); contains(normal,"3 more branches on Shift-hover.")
++            excludes(normal,"106192"); excludes(normal,"3902")
++        end
++        local detail=hover(ui,env,bar,true)
++        contains(detail,"Source pin:"); contains(detail,"Shared currency 3902"); contains(detail,"Observed tree at 100")
++        if n==1 then contains(detail,"Path 106184"); assert(#env.GameTooltip.lines>16,"diagnostics not truncated") end
++        bar.scripts.OnLeave(bar); eq(env.GameTooltip.shown,false)
++    end
++    local normal=hover(ui,env,I.Knowledge,false); contains(normal,"Knowledge trees: 4"); contains(normal,"Unspent knowledge is shown separately.")
++    contains(hover(ui,env,I.Knowledge,true),"knowledgeRaw:"); verify()
++end)
++case("U01 stale tree keeps old totals name and age while unknown raw stays unknown",function()
++    local values=payloadFixtures(); values["tree:11"].name="Last known tree"; values["tree:11"].purchased=4
++    values["tree:11"].paths[1].purchased=4
++    local ui,env,c=uiFixture(values)
++    local currentRaw=C.Copy(values.knowledgeRaw); currentRaw.tabs[1].paths[72].node.ranksPurchased=29
++    assert(C.Apply(c.db,character,identity,{["tree:11"]=C.Observation("unknown",nil,90,"fixture","PRIVATE_TREE_FAILURE"),
++        knowledgeRaw=C.Observation("observed",currentRaw,90,"fixture"),
++        knowledgeIndex=C.Observation("observed",{{id=11,name="Current invalid raw label",root=111}},90,"fixture")},90,"fixture"))
++    ui:Refresh(); local verify=stableGraph({c.db,c.fresh})
++    local text=hover(ui,env,ui.widgets[1].bars[1],false)
++    contains(text,"Last known tree"); contains(text,"Purchased/capacity: 4/10"); contains(text,"Stale: refresh unavailable")
++    excludes(text,"29/")
++    excludes(text,"Current invalid raw label"); excludes(text,"PRIVATE_TREE_FAILURE")
++    contains(hover(ui,env,ui.widgets[1].bars[1],true),"PRIVATE_TREE_FAILURE"); verify()
++    values["tree:11"]=nil; values.knowledgeRaw=currentRaw
++    local other,e=uiFixture(values)
++    text=hover(other,e,other.widgets[1].bars[1],false)
++    contains(text,"Total unknown"); excludes(text,"0/10"); excludes(text,"raw purchased")
++    contains(hover(other,e,other.widgets[1].bars[1],true),"raw purchased=29")
++end)
++case("U01 absent false throwing nonboolean modifier always selects safe concise OnEnter",function()
++    local ui,env=uiFixture()
++    local targets={ui.statusArea,ui.widgets[1].cells[I.Name],ui.widgets[1].cells[I.Stat],ui.widgets[1].cells[I.Enchant],
++        ui.widgets[1].cells[I.Tool],ui.widgets[1].bars[1]}
++    for _,target in ipairs(targets) do
++        hover(ui,env,target,false); local expected=C.Copy(env.GameTooltip.lines)
++        for _,mode in ipairs({"absent","false","throw","number","string","table","noncallable"}) do
++            if mode=="absent" then env.IsShiftKeyDown=nil
++            elseif mode=="false" then env.IsShiftKeyDown=function() return false end
++            elseif mode=="throw" then env.IsShiftKeyDown=function() error("PRIVATE_MODIFIER_ERROR") end
++            elseif mode=="noncallable" then env.IsShiftKeyDown=true
++            else local value=mode=="number" and 1 or mode=="string" and "true" or {}; env.IsShiftKeyDown=function() return value end end
++            target.scripts.OnEnter(target); assert(deepEqual(env.GameTooltip.lines,expected),"safe modifier fallback: "..mode)
++        end
++    end
++end)
++case("U01 repeated hovers rebuilds preserve arrays state DB session and never accumulate",function()
++    local ui,env,c,g=uiFixture()
++    c.fresh={[character.guid..":2913"]={generation=1,fields={unspent=true}}}; ui:Refresh()
++    local _,state=V.Field(g,"unspent",c.fresh[character.guid..":2913"])
++    local verify=stableGraph({c.db,c.fresh,ui.rows[1].tooltip,ui.rows[1].gear.tool.tooltip,ui.rows[1].trees[1].tooltip})
++    local originals={row=C.Copy(ui.rows[1].tooltip),tool=C.Copy(ui.rows[1].gear.tool.tooltip),tree=C.Copy(ui.rows[1].trees[1].tooltip)}
++    for iteration=1,3 do
++        for col=1,14 do
++            local first=hover(ui,env,col,false); hover(ui,env,col,true); eq(hover(ui,env,col,false),first)
++        end
++        hover(ui,env,ui.widgets[1].bars[1],false); hover(ui,env,ui.widgets[1].bars[1],true)
++        ui:Refresh(); verify()
++        assert(deepEqual(ui.rows[1].tooltip,originals.row) and deepEqual(ui.rows[1].gear.tool.tooltip,originals.tool) and
++            deepEqual(ui.rows[1].trees[1].tooltip,originals.tree),"diagnostic arrays stable across rebuild")
++        local _,after=V.Field(g,"unspent",c.fresh[character.guid..":2913"]); assert(deepEqual(after,state),"V.Field diagnostic state unchanged")
++    end
++end)
++case("U01 missing observation and scan times stay unknown rather than becoming now",function()
++    local ui,env,c,g=uiFixture()
++    local copy=C.Copy(g); copy.scannedAt=nil; copy.fields.unspent.last.observedAt=nil
++    ui.rows={V.Row(character.guid,c.db.characters[character.guid],2913,copy,nil,100,false)}; ui:Render()
++    local text=hover(ui,env,I.LastUpdated,false); contains(text,"? age"); excludes(text,"0s")
++    text=hover(ui,env,I.Unspent,false); contains(text,"? age"); excludes(text,"0s")
++    contains(hover(ui,env,I.Unspent,true),"observed ?")
++end)
++case("U01 all32 observed stat amounts remain within addon line budget without evidence loss",function()
++    local values=payloadFixtures(); values.tool.stats={}
++    for n=1,32 do values.tool.stats["ITEM_MOD_UNMAPPED_"..n]=1000+n end
++    local ui,env=uiFixture(values)
++    for _,col in ipairs({I.Tool,I.Stat}) do
++        local text=hover(ui,env,col,false)
++        for n=1,32 do contains(text,"Unknown stat: "..(1000+n)) end
++        excludes(text,"ITEM_MOD_UNMAPPED_")
++        local diagnostic=hover(ui,env,col,true)
++        contains(diagnostic,"key ITEM_MOD_UNMAPPED_32"); assert(#env.GameTooltip.lines>32,"diagnostics retain all stats")
++    end
++end)
++case("U01 branch unknown availability missing observations zero capacity and archive stay honest",function()
++    local values=payloadFixtures(); local tree=values["tree:11"]
++    tree.capacity=0; tree.paths[1].capacity=0; tree.paths[1].node.isAvailable=nil
++    values.knowledgeIndex[1].name=nil; tree.name=nil
++    local ui,env,c,g=uiFixture(values)
++    local text=hover(ui,env,ui.widgets[1].bars[1],false)
++    contains(text,"Knowledge tree"); contains(text,"Purchased/capacity: 0/0")
++    contains(text,"Main branch: 0/0; availability unknown")
++    excludes(text,"999999"); excludes(text,"unlocked"); excludes(text,"spend-ready")
++    -- A bounded projection-only missing-path input, never inserted into the valid DB.
++    local projection=C.Copy(g); projection.fields["tree:11"].last.value.paths[1].children={999999}
++    ui.rows={V.Row(character.guid,c.db.characters[character.guid],2913,projection,nil,100,false)}; ui:Render()
++    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Some branch observations are missing."); excludes(text,"999999")
++    contains(hover(ui,env,ui.widgets[1].bars[1],true),"Missing path 999999")
++    assert(C.Archive(c.db,character.guid,2913,95,"fixture")); ui.options.archived=true; ui:Refresh()
++    text=hover(ui,env,ui.widgets[1].bars[1],false); contains(text,"Archived snapshot; last observed 1m ago.")
++    excludes(text,"Current observation"); eq(#ui.rows[1].warnings,0)
++end)
++end
++-- U01 END
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# docs/dashboard/README.md baseSHA256=5372de4fb876b870a59182798640338b81f48b26ce3478282c4c952b19c73bde targetSHA256=a138ea3c677f093513b942a4017ec9d756374bed15d78ccc11407acfaa6dac03
+--- pre-U01/docs/dashboard/README.md
++++ U01/docs/dashboard/README.md
+@@ -2,23 +2,62 @@
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+ 
++## U01 — concise normal hover; Shift-hover diagnostics (review pending)
++
++Normal hovers now explain only the hovered field: full identities, observed skill/
++modifier, currencies/unspent, gear quality/rarity, full tool stat amounts and enchant
++information. Last Updated explains scan age and independent field observation times.
++Saved, stale, unknown, confirmed empty and archived states remain distinct; displaying
++a saved snapshot never makes it fresh. Tree hovers show purchased/capacity, up to six
++ordinal branches (not invented names), known locks and the caveat **Future point costs
++are unverified.** Extra branches and technical evidence remain on Shift-hover.
++
++**Hold Shift BEFORE entering the cell/bar/status hover** for the existing full diagnostic
++view, including exact field times, raw reasons/IDs, reconciliation and source pins.
++Changing Shift while already hovering does not require an immediate tooltip update;
++leave and enter again. Native item/third-party tooltips remain on A1/A2/Tool only;
++Stat and Enchant use focused summaries normally and full tool evidence on Shift,
++without native hyperlinks in either mode.
++Observed stat totals are not split into base/enchant amounts. Enchant rank/amount is
++not inferred from category or tool quality. Missing modifier support safely stays concise.
++
++Local U01 delivery has **164/164 addon cases (149 retained +15 new)**, plus744 K6 and565
++K7 checks; diagnostic23/23 also passes. Local mocks do not validate WoW UI/APIs or timing.
++**Do not update yet: primary comparison and independent read-only review are pending.**
++After primary records a satisfactory review, the scoped user update is ONLY
++`CraftArmy/ViewModel.lua`, `CraftArmy/Dashboard.lua`, `CraftArmy/SelfTests.lua` after quitting
++and backing up. SelfTests carries new regression definitions, **not a request to rerun the
++full native suite**. Preserve all other modules, SavedVariables and diagnostics.
++
++After review, primary can request one concise focused usability check from existing
++snapshots: normal then Shift-before-hover on a numeric field, Last Updated, Tool/Stat/
++Enchant, a tree and status. Confirm readability, full stat amounts, truthful unknown/
++stale context where available, and unchanged native/third-party gear content. Report
++errors or misleading text; do not reset data, perform gameplay actions, restart V01,
++collect large dumps or chase case88 timing. Native U01 readability/Shift behavior remains
++NOT RUN; broader T02/mappings/semantics/guides are not accepted.
++
+ ## Current validation policy — approved 2026-11-07
+ 
+-**No further full `/ca selftest` timing chase or file update is requested.** The latest
++**No further full `/ca selftest` timing chase is requested.** U01's scoped update above
++is review-gated, not currently recommended. The latest
+ client result is **INCOMPLETE:87 passed/0failed of149**, case88unit2 at134.4ms,
+ wall77323.9ms. It is not a full PASS and does not show an assertion failure. Keep the
+ 100ms/10000-step safety limits and every existing test/workload unchanged.
+ 
+-Full correctness/stress coverage runs locally: current reviewed code has149/149 addon
++Full correctness/stress coverage runs locally: the pre-U01 reviewed code had149/149 addon
+ fixture PASS,744 K6 checks,565 K7 checks and23/23 diagnostic PASS. This does not prove
+ WoW APIs, native numeric behavior or normal-use responsiveness. With the user's explicit
+ agreement, completing every synthetic client fixture under100ms is **no longer a
+ blanket prerequisite** for focused native validation. Historical update/retest/full-suite
+ gates below are superseded by this policy, not retroactively passed or deleted.
+ 
+-### Focused WoW check — first round
+-
+-Use the current reviewed build; no reinstall or selftest is needed.
++### Completed V01 context — historical first-round procedure, not a new request
++
++All three user-run V01 rounds are complete for the reported scoped Inscription values,
++normal-use responsiveness, closed-context preservation and reload persistence. Explicit
++stale wording was not confirmed. Do not restart these rounds for U01; the earlier
++procedure is retained below as historical context, not current testing instructions.
+ 
+ 1. Out of combat, open your own ready **Midnight Inscription**, with no pending
+    specialization changes. Do not craft, purchase, unlock or spend knowledge for testing.

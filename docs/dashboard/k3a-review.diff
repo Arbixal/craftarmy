@@ -1,0 +1,227 @@
+# Primary-generated actual K3 to K3a fixture-only comparison; not Lua execution.
+# CraftArmy/SelfTests.lua baselineSHA256=fda95e1fe727d224371f57e0f2f0cf9777b7b78b6fcffefa04c00b2cfe3c428b targetSHA256=8d2e9be128ddd18d73a1bb8f71c8a974ed246872b5d3d283b0924f888aa97426
+--- K3/CraftArmy/SelfTests.lua
++++ K3a/CraftArmy/SelfTests.lua
+@@ -1100,15 +1100,20 @@
+     eq(env.CraftArmyDiagnosticsDB.sentinel,true)
+ end)
+ 
+-local function dashboardRows(count)
++local function dashboardRows(count,checkpoint)
+     local env,state=fixtureAPI(); mockWidgets(env)
+     local db=C.Open(nil)
+     for i=1,count do
+         local who={guid=string.format("Player-Layout-%03d",i),name=string.format("Fixture %02d",i),realm="Synthetic"}
+         assert(C.Apply(db,who,identity,{unspent=C.Observation("observed",0,10,"fixture")},10,"fixture"),"layout row setup")
+-    end
++        pause(checkpoint,"K3a layout row applied")
++    end
++    pause(checkpoint,"K3a before layout UI construction")
+     local collector=NS.Collectors.New(env,db)
+-    local ui=NS.Dashboard.New(env,collector); ui:Toggle()
++    local ui=NS.Dashboard.New(env,collector)
++    pause(checkpoint,"K3a layout UI constructed before Toggle")
++    ui:Toggle()
++    pause(checkpoint,"K3a layout Toggle complete")
+     return ui,env,collector,state
+ end
+ local function contained(env,child,parent,context)
+@@ -1124,7 +1129,7 @@
+     local expected={110,100,150,64,44,44,44,180,130,96,56,232,74,100}
+     for _,count in ipairs({0,1,2,12,13,37}) do
+         pause(checkpoint,"R5 geometry variant")
+-        local ui,env=dashboardRows(count)
++        local ui,env=dashboardRows(count,checkpoint)
+         local visible=math.min(12,math.max(1,count))
+         eq(ui.frame.width,1454,"fixed outer width"); eq(ui.frame.height,194+22*visible,"dynamic window height")
+         eq(ui.viewport.width,1424,"shared content width"); eq(ui.viewport.height,22*visible,"no empty 12-row viewport")
+@@ -1176,37 +1181,55 @@
+         ui:FinishConfirmation(false)
+     end
+ end)
+-case("R5 filter shrink grow archive paging selection and confirmation stay reachable",function()
+-    local ui,env,collector=dashboardRows(37)
++case("R5 filter shrink grow archive paging selection and confirmation stay reachable",function(checkpoint)
++    local ui,env,collector=dashboardRows(37,checkpoint)
+     local first=ui.widgets[1]
+     eq(ui.frame.height,458); eq(ui.widgets[1].row.name,"Fixture 01")
++    pause(checkpoint,"K3a paging initial state")
+     ui.footer[5].scripts.OnClick(ui.footer[5]); eq(ui.offset,12); eq(ui.widgets[1].row.name,"Fixture 13")
++    pause(checkpoint,"K3a next page 12")
+     ui.footer[5].scripts.OnClick(ui.footer[5]); eq(ui.offset,24); eq(ui.widgets[1].row.name,"Fixture 25")
++    pause(checkpoint,"K3a next page 24")
+     ui.footer[5].scripts.OnClick(ui.footer[5]); eq(ui.offset,25); eq(ui.widgets[12].row.name,"Fixture 37")
++    pause(checkpoint,"K3a next page clamped25")
+     ui.selected=ui.widgets[12].row
+     ui:Lifecycle("delete"); eq(ui.confirmPanel.shown,true)
++    pause(checkpoint,"K3a selected delete confirmation")
+     ui.filters.character:SetText("Fixture 01"); ui.filters.character.scripts.OnTextChanged(ui.filters.character)
+     eq(#ui.rows,1); eq(ui.offset,0); eq(ui.frame.height,216); eq(ui.selected,nil)
+     eq(ui.confirmPanel.shown,true); contained(env,ui.confirmButtons[2],ui.frame,"cancel after shrink")
++    pause(checkpoint,"K3a character filter shrink")
+     ui.confirmButtons[2].scripts.OnClick(ui.confirmButtons[2]); eq(ui.confirmPanel.shown,false)
++    pause(checkpoint,"K3a confirmation cancel")
+     ui.filters.character:SetText(""); ui.filters.character.scripts.OnTextChanged(ui.filters.character)
+     eq(#ui.rows,37); eq(ui.frame.height,458); eq(ui.widgets[1],first,"widgets reused across filter growth")
++    pause(checkpoint,"K3a character filter growth")
+     ui.offset=999; ui:Refresh(); eq(ui.offset,25,"refresh clamps old offset")
++    pause(checkpoint,"K3a Refresh clamps offset")
+     ui.viewport.scripts.OnMouseWheel(ui.viewport,100); eq(ui.offset,0)
++    pause(checkpoint,"K3a mousewheel first page")
+     ui.viewport.scripts.OnMouseWheel(ui.viewport,-100); eq(ui.offset,25)
++    pause(checkpoint,"K3a mousewheel last page")
+     ui.footer[4].scripts.OnClick(ui.footer[4]); eq(ui.offset,13)
+     eq(ui.filters.profession,nil,"profession text input removed")
++    pause(checkpoint,"K3a previous page")
+     ui.professionDropdown.radios[2].onSelect(ui.professionDropdown.radios[2].data) -- Alchemy; fixtures are Inscription.
+     eq(#ui.rows,0); eq(ui.frame.height,216); eq(ui.offset,0); eq(ui.empty.shown,true)
++    pause(checkpoint,"K3a profession filter Alchemy")
+     ui.professionDropdown.radios[1].onSelect(ui.professionDropdown.radios[1].data)
++    pause(checkpoint,"K3a profession filter All")
+     C.Archive(collector.db,"Player-Layout-001",2913,120,"fixture")
++    pause(checkpoint,"K3a archive first fixture")
+     C.Archive(collector.db,"Player-Layout-002",2913,120,"fixture")
++    pause(checkpoint,"K3a archive second fixture")
+     ui.archived.scripts.OnClick(ui.archived); eq(#ui.rows,2); eq(ui.frame.height,238); eq(ui.offset,0)
+     eq(#ui.rows[1].warnings,0,"archive warnings remain excluded")
++    pause(checkpoint,"K3a archived view")
+     ui.archived.scripts.OnClick(ui.archived); eq(#ui.rows,35); eq(ui.frame.height,458)
+-end)
+-case("R5 screen fit uses shared Finite and positive local scale on small invalid screens",function()
+-    local ui,env=dashboardRows(13)
++    pause(checkpoint,"K3a active view")
++end)
++case("R5 screen fit uses shared Finite and positive local scale on small invalid screens",function(checkpoint)
++    local ui,env=dashboardRows(13,checkpoint)
+     for _,sample in ipairs({{w=800,h=600},{w=1920,h=200},{w=31,h=31},{w=0,h=0},
+         {w=-1,h=math.huge},{w=0/0,h="invalid"},{w=20,h=20}}) do
+         env.UIParent.width=sample.w; env.UIParent.height=sample.h; ui:Refresh()
+@@ -1215,14 +1238,17 @@
+         if C.Finite(sample.w) and sample.w>30 then assert(1454*scale<=sample.w-30+0.000001,"width fit margin") end
+         if C.Finite(sample.h) and sample.h>30 then assert(458*scale<=sample.h-30+0.000001,"height fit margin") end
+         eq(env.UIParent.scale,1,"global UI scale unchanged")
++        pause(checkpoint,"K3a screen fit variant complete")
+     end
+     env.UIParent.GetWidth=false; env.UIParent.GetHeight=function() error("fixture screen unavailable") end
+     ui:Refresh(); eq(ui.frame.scale,1,"unusable dimensions use safe default")
++    pause(checkpoint,"K3a unavailable screen Refresh complete")
+     env.UIParent.GetWidth=function() return 900 end; env.UIParent.GetHeight=function() return 400 end
+     ui:Refresh(); eq(ui.frame.scale,math.min(870/1454,370/458),"fit recomputed on refresh")
+-end)
+-case("R5 friendly status keeps raw unknown error block reasons and does not mutate collector",function()
+-    local ui,env,collector=dashboardRows(1)
++    pause(checkpoint,"K3a recomputed screen Refresh complete")
++end)
++case("R5 friendly status keeps raw unknown error block reasons and does not mutate collector",function(checkpoint)
++    local ui,env,collector=dashboardRows(1,checkpoint)
+     for _,sample in ipairs({
+         {raw="TRADE_SKILL_CLOSE",part="showing saved snapshots"},
+         {raw="TRADE_SKILL_DATA_SOURCE_CHANGING",part="wait for your own ready profession"},
+@@ -1243,6 +1269,7 @@
+         eq(collector.reason,sample.raw); eq(collector.blockReason,sample.block); eq(collector.db,db)
+         assert(deepEqual(collector.db,before.db) and deepEqual(collector.fresh,before.fresh) and deepEqual(collector.pending,before.pending),"presentation never edits snapshots/session")
+         eq(collector.revision,before.revision); eq(collector.serial,before.serial)
++        pause(checkpoint,"K3a status Refresh variant complete")
+     end
+ end)
+ case("R5 plain tooltip removes complete icons only and escapes malformed hostile markup",function()
+# docs/dashboard/README.md baselineSHA256=1026bde1bfb709dace442c0820f0d11d378972a5916cfe52f361516e975c8f6a targetSHA256=1a3ad3ad6c28644a7d11fe1da4dc58ed95ef6e75ea4a2fc50f8c8d3f099c4da5
+--- K3/docs/dashboard/README.md
++++ K3a/docs/dashboard/README.md
+@@ -1,10 +1,11 @@
+ # CraftArmy 0.2.0-mvp — snapshot dashboard
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+-**Current selftest paused:** the user reported96/96 assertions PASS but an extended
+-game lockup/execution-limit warning. Performance acceptance is CHANGES REQUIRED.
+-Do **not** rerun that synchronous suite. K3 below is delivered for independent review,
+-not yet approved for a user update/run. Warning attribution is unmeasured.
++**Current selftest paused:** K3 stopped correctly **INCOMPLETE,42 passed/0 failed of111**
++at a109.7ms unit (wall5860.4ms), exceeding the unchanged100ms limit. This is not a full
++suite PASS. K3a checkpoint-only correction below awaits independent review; do **not**
++rerun the unchanged K3 or old synchronous suite. Historical96/96 accompanied extended
++lockup/execution-limit warnings; recurrence/interactivity and warning cause remain unverified.
+ K2 adds narrowly scoped Midnight Inscription native-rank/shared-spent-reconciled
+ bars, subject to complete same-scan guards and review/user validation. This is NOT
+ verified future/all-rank cost proof. Registry support for eight crafting families is not runtime
+@@ -37,7 +38,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3 review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3a review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -159,7 +160,7 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K3 responsive selftest (current; user only AFTER independent review)
++### K3a R5 fixture checkpoints (current; user only AFTER independent review)
+ 
+ The historical user **96 passed / 0 failed** is functional assertion evidence only:
+ the accompanying extended lockup and69x execution-limit warning make safe performance
+@@ -167,17 +168,25 @@
+ Do not disable it, suppress error handlers, change profiling CVars or rerun the old
+ suite. The K2 production accounting and all saved data remain unchanged.
+ 
+-1. **Wait for primary's independent K3 review.** Only after review/primary coordination,
++The subsequent K3 run passed the first42 cases but stopped **INCOMPLETE42/111,0 failed**:
++case42 R5 filter/paging took109.7ms in one unit, wall5860.4ms. The100ms fail-safe correctly
++stopped it; remaining69 cases did not run. Warning recurrence and actual interactivity
++were not supplied. K3a adds safe fixture boundaries without removing assertions, reducing
++37-row stress work or changing the runner/threshold. New native performance is **NOT RUN**.
++
++1. **Wait for primary's independent K3a review.** Only after review/primary coordination,
+    fully quit WoW and back up `WTF`, including production/diagnostic SavedVariables.
+-   Already on K2: replace **only `CraftArmy/Commands.lua` and `CraftArmy/SelfTests.lua`**
+-   with the reviewed K3 pair. Keep every other addon file, `CraftArmyDB`, diagnostics
+-   and all SavedVariables. Same version0.2.0-mvp/Interface120105/schema1; no reset.
+-2. Login/reload. The revised `/ca selftest` is asynchronous: STARTED reports the actual
++   Already on K3: replace **only `CraftArmy/SelfTests.lua`** with the reviewed K3a file.
++   Keep **`Commands.lua`**, all K2/other addon files, `CraftArmyDB`, diagnostics and all
++   SavedVariables unchanged. Same version0.2.0-mvp/Interface120105/schema1; no reset.
++2. Login/reload, then explicitly run **`/ca selftest` out of combat**. It is asynchronous:
++   STARTED reports the actual
+    total (**111 definitions**, not a promised pass). It executes at most one safe unit
+    per native frame; large stress operations/parameter variants have internal safe
+    boundaries. The game should remain interactive, but this is **not yet measured**.
+-   Report actual COMPLETE/INCOMPLETE counts, elapsed wall/max-unit timing, case/unit/
+-   label and warnings/errors, including whether the game stayed responsive.
++   Wait for and report explicit **COMPLETE/INCOMPLETE** counts, elapsed wall/max-unit
++   timing, case/unit/label and warnings/errors, including whether the game stayed
++   responsive and whether the execution-limit warning recurred.
+ 3. While running, repeat `/ca selftest` only for status or use **`/ca selftest cancel`**
+    to release work. Progress appears every10 finished cases or each second during
+    multi-unit work. Entering combat stops INCOMPLETE before further units; leaving
+@@ -186,7 +195,9 @@
+    It cannot interrupt an atomic operation already running; no hard latency guarantee
+    is claimed. Missing/invalid/backward clocks, unsafe function drift or callback
+    errors also stop. Share the case/unit/label/timing **once**; do not repeatedly rerun
+-   or wait through freezing. Function-drift reports require reload, not manual repair.
++   the unchanged version or wait through freezing. A new slow-stop also means stop and
++   share once, not raise the limit, skip tests or rerun unchanged. Function-drift reports
++   require reload, not manual repair. No automatic resume occurs.
+    Report failures/cancellation as incomplete evidence; preserve data and backups.
+ 5. Primary must record satisfactory **safe complete fixture execution and responsiveness**
+    before the K2 current four-bar/hover/unspent comparison resumes. Until then it stays
+@@ -194,14 +205,15 @@
+    actual frame scheduling/performance or all-rank costs. `/cad selftest` is separate,
+    unchanged and not requested again by this correction.
+ 
+-### K2 native-rank bars (historical update; native checklist paused pending K3)
++### K2 native-rank bars (historical update; native checklist paused pending safe completion)
+ 
+ Version **0.2.0-mvp**, Interface **120105** and schema **1** stay unchanged. The prior
+ K1 user **66/66** and complete native report are baseline evidence only. K2 defines
+ **96 cases** (all66 byte-exact retained +30 K2 definitions, including9 review-correction
+ cases). User96/96 assertions now PASS, but lockup/warning blocks performance acceptance.
+-The historical five-file update/selftest instructions below are superseded by K3's
+-two-file update/review gate; **do not repeat the old suite**. Injected fixtures are not API proof.
++The historical five-file update/selftest instructions below are superseded by K3a's
++SelfTests-only update/review gate for users already on K3; **do not repeat the old suite**.
++Injected fixtures are not API proof.
+ 
+ K2 corrected static re-review passed; this does not clear the new responsiveness gate.
+ The following records the previous update and deferred native comparison scope.

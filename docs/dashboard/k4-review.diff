@@ -1,0 +1,586 @@
+# Primary actual K3f to K4 comparison; source evidence, not Lua execution.
+# CraftArmy/SelfTests.lua baselineSHA256=e3c3e0755ad2200ccf83df8505d092148f86e6cce28b4c20a0c71da18dbb7ccf targetSHA256=27a1f0ca2697a1154a0036a22dbe9d01ad40465eb137b0a8eaca9fe59dbdc09f
+--- K3f/CraftArmy/SelfTests.lua
++++ K4/CraftArmy/SelfTests.lua
+@@ -10,15 +10,135 @@
+ end
+ local function pause(checkpoint,label) if checkpoint then checkpoint(label) end end
+ 
++-- K4: fixture-only, synchronous observation. No checkpoints/output under wrappers.
++-- Reports contain only fixed keys/reasons and scalar timings, never fixture graphs.
++local timingTags={"O","A","C","K","E","G","B"}
++local timingReasons={
++    ["clock missing"]=true,["clock error"]=true,["clock nonfinite"]=true,
++    ["clock backward"]=true,["probe cap"]=true,["depth cap"]=true,
++    ["invalid partition"]=true,["invalid report"]=true,
++}
++local function pack(...) return {n=select("#",...),...} end
++function Tests.MeasureScan(collector,clock)
++    local bindings,stages,stack={}, {}, {}
++    local reason,last,probes,root= nil,nil,0,nil
++    local function unavailable(why) if not reason then reason=why end end
++    local function readClock()
++        if reason then return nil end
++        if type(clock)~="function" then unavailable("clock missing"); return nil end
++        if probes>=10000 then unavailable("probe cap"); return nil end
++        probes=probes+1
++        local ok,value=pcall(clock)
++        if not ok then unavailable("clock error"); return nil end
++        if not C.Finite(value) then unavailable("clock nonfinite"); return nil end
++        if last and value<last then unavailable("clock backward"); return nil end
++        last=value
++        return value
++    end
++    local function nonnegative(value)
++        if not C.Finite(value) or value<0 then unavailable("invalid partition"); return false end
++        return true
++    end
++    local function restore()
++        for i=#bindings,1,-1 do
++            local b=bindings[i]; rawset(b.target,b.key,b.original); bindings[i]=nil
++        end
++    end
++    local function wrap(target,key,tag)
++        local original=target[key]
++        assert(type(original)=="function")
++        bindings[#bindings+1]={target=target,key=key,original=rawget(target,key)}
++        rawset(target,key,function(...)
++            if reason then return original(...) end
++            -- The root Scan frame counts toward the 64 active-frame cap.
++            if #stack>=64 then unavailable("depth cap"); return original(...) end
++            local started=readClock()
++            if not started then return original(...) end
++            local frame={started=started,children=0}
++            stack[#stack+1]=frame
++            local values=pack(original(...)) -- preserve trailing/interior nils
++            local finished=readClock()
++            stack[#stack]=nil
++            if finished then
++                local inclusive=finished-frame.started
++                local exclusive=inclusive-frame.children
++                local s=stages[tag]; local parent=stack[#stack]
++                if nonnegative(inclusive) and nonnegative(exclusive) then
++                    s.calls=s.calls+1
++                    s.inclusiveMs=s.inclusiveMs+inclusive
++                    s.exclusiveMs=s.exclusiveMs+exclusive
++                    parent.children=parent.children+inclusive
++                    nonnegative(s.inclusiveMs); nonnegative(s.exclusiveMs); nonnegative(parent.children)
++                end
++            end
++            return unpack(values,1,values.n)
++        end)
++    end
++    local ok,first,second,report=pcall(function()
++        if readClock() then
++            for _,tag in ipairs(timingTags) do stages[tag]={calls=0,inclusiveMs=0,exclusiveMs=0} end
++            wrap(C,"Open","O"); wrap(C,"Apply","A"); wrap(C,"Copy","C")
++            wrap(K,"Evaluate","E"); wrap(collector,"Knowledge","K")
++            wrap(collector,"Gear","G"); wrap(collector,"Context","B")
++            root=readClock() -- bracket Scan, not wrapper installation/cleanup
++            if root then stack[1]={started=root,children=0} else restore() end
++        end
++        -- An initially unusable clock executes this same original Scan unwrapped.
++        local a,b=collector:Scan()
++        if not reason then
++            local finished=readClock()
++            if finished then
++                local total=finished-root; local other=total-stack[1].children
++                local partition=other
++                for _,tag in ipairs(timingTags) do partition=partition+stages[tag].exclusiveMs end
++                if nonnegative(total) and nonnegative(other) and nonnegative(partition)
++                    and math.abs(partition-total)<=0.000001 then
++                    return a,b,{status="observed",totalMs=total,otherMs=other,stages=stages}
++                end
++                unavailable("invalid partition")
++            end
++        end
++        return a,b,{status="unavailable",reason=reason}
++    end)
++    -- Reverse installation order, including on original errors and mid-clock failure.
++    restore()
++    if not ok then error("timed scan failed (payload omitted)",0) end
++    return first,second,report
++end
++function Tests.FormatScanTiming(report)
++    local function unknown(reason)
++        return "scan2 timings unavailable ("..(timingReasons[reason] and reason or "invalid report")..")"
++    end
++    if type(report)~="table" or getmetatable(report)~=nil then return unknown() end
++    if report.status~="observed" then return unknown(report.reason) end
++    if not C.Finite(report.totalMs) or report.totalMs<0 then return unknown() end
++    local values={report.totalMs}
++    if type(report.stages)~="table" or getmetatable(report.stages)~=nil then return unknown() end
++    for _,tag in ipairs(timingTags) do
++        local s=report.stages[tag]
++        if type(s)~="table" or getmetatable(s)~=nil then return unknown() end
++        values[#values+1]=s.exclusiveMs
++        if not C.Finite(s.exclusiveMs) or s.exclusiveMs<0 then return unknown() end
++    end
++    values[9]=report.otherMs
++    local parts={"scan2 ms excl"}
++    for i,tag in ipairs({"T","O","A","C","K","E","G","B","R"}) do
++        local value=values[i]
++        if not C.Finite(value) or value<0 then return unknown() end
++        parts[#parts+1]=tag.."="..(value>99999 and ">99999" or string.format("%.1f",value))
++    end
++    return table.concat(parts," ")
++end
++
+ -- Only native Lua resumes/yields: never wrap a case in pcall (Lua 5.1 cannot
+ -- yield through that C boundary). Protected fixture helpers finish before pausing.
+ function Tests.NewRunner(cases)
+     local r={passed=0,failed=0,lines={},total=0,index=0,steps=0,status="running",completed=false}
+-    local list,thread,apply,evaluate
++    local list,thread,apply,evaluate,note
+     local token={}
+     local function stop(reason)
+         r.status="incomplete"; r.completed=false; r.reason=clean(reason,256)
+-        list=nil; thread=nil; apply=nil; evaluate=nil
++        list=nil; thread=nil; apply=nil; evaluate=nil; note=nil
+         return r
+     end
+     function r:Cancel(reason)
+@@ -53,7 +173,7 @@
+                 self.status="complete"; self.completed=true; list=nil; return self
+             end
+             self.index=self.index+1; self.name=list[self.index].name
+-            self.label="case entry"; self.unit=0
++            self.label="case entry"; self.unit=0; note=nil
+             apply,evaluate=C.Apply,K.Evaluate
+             local fn=list[self.index].fn
+             thread=coroutine.create(function()
+@@ -62,6 +182,11 @@
+                         error("unsafe checkpoint: fixture overrides still active",0)
+                     end
+                     coroutine.yield(token,clean(label or "checkpoint"))
++                end,function(label)
++                    if C.Apply~=apply or K.Evaluate~=evaluate then
++                        error("unsafe annotation: fixture overrides still active",0)
++                    end
++                    note=clean(label,128) -- non-yielding, last note only
+                 end)
+             end)
+         end
+@@ -75,11 +200,12 @@
+             self.label=label
+             return self
+         end
+-        self.label="case return"
++        self.label=note and clean("case return; "..note,128) or "case return"
+         if ok then self.passed=self.passed+1 else self.failed=self.failed+1 end
+         self.lastLine=(ok and "PASS " or "FAIL ")..self.name..(ok and "" or ": "..clean(type(value)=="string" and value or "case error",256))
++        if note then self.lastLine=self.lastLine.."; "..note end
+         self.lines[#self.lines+1]=self.lastLine
+-        thread=nil; apply=nil; evaluate=nil
++        thread=nil; apply=nil; evaluate=nil; note=nil
+         if self.index==self.total then self.status="complete"; self.completed=true; list=nil end
+         return self
+     end
+@@ -2502,7 +2628,7 @@
+     local old=dbWith({knowledgeRaw=scan(),["tree:11"]=treeValue(11,0,10)})
+     eq(C.Open(old),old,"old schema1 no migration or native inference")
+ end)
+-case("K2 successful scan reload archive hover keeps native zero own evidence time and unspent separate",function(checkpoint)
++case("K2 successful scan reload archive hover keeps native zero own evidence time and unspent separate",function(checkpoint,annotate)
+     local _,s,_,c=k2Fixture();
+     pause(checkpoint,"K3f scan fixture ready")
+     assert(c:Scan())
+@@ -2530,7 +2656,21 @@
+     rows=NS.ViewModel.Build(reopened,{}, {archived=true},111); eq(#rows,1); eq(rows[1].trees[1].purchased,0)
+     eq(rows[1].trees[1].state.fresh,false); eq(rows[1].trees[1].state.observedAt,100)
+     pause(checkpoint,"K3f archived view verified")
+-    s.at=120; assert(c:Scan()); eq(g.fields["tree:1122"].last.observedAt,100,"old returned generation not mutated")
++    s.at=120
++    -- Resolve only here, never at load/setup or from the synthetic fixture's time.
++    local clock
++    if type(_G.debugprofilestop)=="function" then clock=_G.debugprofilestop
++    elseif type(_G.GetTimePreciseSec)=="function" then
++        local seconds=_G.GetTimePreciseSec
++        clock=function()
++            local value=seconds()
++            if not C.Finite(value) then error("invalid seconds clock",0) end
++            return value*1000
++        end
++    end
++    local success,why,report=Tests.MeasureScan(c,clock)
++    assert(success,why); eq(g.fields["tree:1122"].last.observedAt,100,"old returned generation not mutated")
++    if annotate then annotate(Tests.FormatScanTiming(report)) end
+ end)
+ case("K2 failed scan preserves ALL coherent trees omitted prior tabs index and nonfresh timestamps",function(checkpoint)
+     for _,mode in ipairs({"mismatch","missingtab","partialtabs","metadata"}) do
+@@ -3477,6 +3617,281 @@
+     assert(#text<=262144); local _,n=text:gsub("\n",""); assert(n+1<=4096)
+ end)
+ 
++-- K4 additions: small stubs exercise instrumentation only, never the old Scan cases.
++local function timingFixture(run)
++    local open,apply,copy,evaluate=C.Open,C.Apply,C.Copy,K.Evaluate
++    local c={}
++    local function noop(...) return ... end
++    C.Open=noop; C.Apply=noop; C.Copy=noop; K.Evaluate=noop
++    c.Context=noop; c.Gear=noop; c.Knowledge=noop
++    c.Scan=function(self)
++        C.Open(); self:Context(); self:Gear(); self:Knowledge(); K.Evaluate(); C.Copy(); C.Apply()
++        return true,"PRIVATE-REASON"
++    end
++    local ok,why=pcall(run,c)
++    K.Evaluate=evaluate; C.Copy=copy; C.Apply=apply; C.Open=open
++    assert(ok,why)
++end
++local function timingRestoration(c)
++    local o,a,v,e,k,g,b=C.Open,C.Apply,C.Copy,K.Evaluate,c.Knowledge,c.Gear,c.Context
++    return function()
++        eq(C.Open,o); eq(C.Apply,a); eq(C.Copy,v); eq(K.Evaluate,e)
++        eq(c.Knowledge,k); eq(c.Gear,g); eq(c.Context,b)
++    end
++end
++local function tickClock()
++    local at=0
++    return function() at=at+1; return at end
++end
++local function privateTimingReport(report)
++    local keys={status=true,reason=true,totalMs=true,otherMs=true,stages=true,
++        O=true,A=true,C=true,K=true,E=true,G=true,B=true,calls=true,inclusiveMs=true,exclusiveMs=true}
++    local function visit(t)
++        eq(getmetatable(t),nil)
++        for key,value in pairs(t) do
++            assert(keys[key],"unexpected report key")
++            if type(value)=="table" then visit(value)
++            elseif type(value)=="number" then assert(C.Finite(value)); assert(value>=0)
++            else assert(value=="observed" or value=="unavailable" or timingReasons[value],"unexpected report value") end
++        end
++    end
++    visit(report)
++end
++case("K4 nested stage calls inclusive exclusive and root residual partition",function()
++    timingFixture(function(c)
++        C.Apply=function() C.Open(); C.Copy(); K.Evaluate() end
++        c.Knowledge=function() C.Copy() end
++        c.Scan=function(self)
++            self:Context(); C.Apply(); self:Knowledge(); self:Gear(); self:Gear()
++            return true,"PRIVATE-REASON"
++        end
++        local restored=timingRestoration(c)
++        local a,b,r=Tests.MeasureScan(c,tickClock()); restored()
++        eq(a,true); eq(b,"PRIVATE-REASON"); eq(r.status,"observed")
++        eq(r.totalMs,19); eq(r.otherMs,6)
++        local expected={O={1,1,1},A={1,7,4},C={2,2,2},K={1,3,2},E={1,1,1},G={2,2,2},B={1,1,1}}
++        local sum=r.otherMs
++        for tag,v in pairs(expected) do
++            eq(r.stages[tag].calls,v[1],tag); eq(r.stages[tag].inclusiveMs,v[2],tag)
++            eq(r.stages[tag].exclusiveMs,v[3],tag); sum=sum+r.stages[tag].exclusiveMs
++        end
++        eq(sum,r.totalMs); privateTimingReport(r)
++        eq(Tests.FormatScanTiming(r),"scan2 ms excl T=19.0 O=1.0 A=4.0 C=2.0 K=2.0 E=1.0 G=2.0 B=1.0 R=6.0")
++    end)
++end)
++case("K4 wrappers preserve original argument identities and all nil return positions",function()
++    timingFixture(function(c)
++        local marker={}; local calls=0
++        local function original(...)
++            local args=pack(...); eq(args.n,4); eq(args[1],marker); eq(args[2],nil)
++            eq(args[3],false); eq(args[4],nil); calls=calls+1
++            return nil,marker,nil,false,nil
++        end
++        C.Open=original; C.Apply=original; C.Copy=original; K.Evaluate=original
++        local function method(self,...) eq(self,c); return original(...) end
++        c.Knowledge=method; c.Gear=method; c.Context=method
++        local function check(...)
++            local values=pack(...); eq(values.n,5); eq(values[1],nil); eq(values[2],marker)
++            eq(values[3],nil); eq(values[4],false); eq(values[5],nil)
++        end
++        c.Scan=function(self)
++            check(C.Open(marker,nil,false,nil)); check(C.Apply(marker,nil,false,nil))
++            check(C.Copy(marker,nil,false,nil)); check(K.Evaluate(marker,nil,false,nil))
++            check(self:Knowledge(marker,nil,false,nil)); check(self:Gear(marker,nil,false,nil))
++            check(self:Context(marker,nil,false,nil)); return false,nil
++        end
++        local restored=timingRestoration(c)
++        local a,b,r=Tests.MeasureScan(c,tickClock()); restored()
++        eq(a,false); eq(b,nil); eq(calls,7); eq(r.status,"observed"); privateTimingReport(r)
++    end)
++end)
++case("K4 success false and private original errors restore all bindings before return",function()
++    timingFixture(function(c)
++        for _,mode in ipairs({"success","false","throw","stage throw","unwrapped throw"}) do
++            local scans=0
++            c.Scan=function(self)
++                scans=scans+1; C.Apply(); self:Knowledge()
++                if mode=="throw" or mode=="unwrapped throw" then error("PRIVATE-SCAN-PAYLOAD|\001") end
++                return mode=="success","PRIVATE-REASON"
++            end
++            local knowledge=c.Knowledge
++            if mode=="stage throw" then c.Knowledge=function() error({secret="PRIVATE-STAGE"}) end end
++            local restored=timingRestoration(c)
++            local clock=mode~="unwrapped throw" and tickClock() or nil
++            local ok,a,b,r=pcall(Tests.MeasureScan,c,clock); restored(); eq(scans,1)
++            if mode=="throw" or mode=="stage throw" or mode=="unwrapped throw" then
++                eq(ok,false); eq(a,"timed scan failed (payload omitted)"); eq(b,nil); eq(r,nil)
++            else
++                eq(ok,true); eq(a,mode=="success"); eq(b,"PRIVATE-REASON")
++                eq(r.status,"observed"); privateTimingReport(r)
++            end
++            c.Knowledge=knowledge
++        end
++    end)
++end)
++case("K4 missing invalid backward and mid-clock failures continue one unchanged Scan",function()
++    timingFixture(function(c)
++        local scan=c.Scan
++        for _,mode in ipairs({"missing","throw","nan","infinity","type","start throw","backward","mid throw","mid nan","end throw"}) do
++            local probes,scans,work=0,0,0
++            local unwrapped=timingRestoration(c)
++            c.Scan=function(self)
++                scans=scans+1
++                if mode~="backward" and mode~="mid throw" and mode~="mid nan" and mode~="end throw" then unwrapped() end
++                local a,b=scan(self); work=work+1; C.Copy(); return a,b
++            end
++            local clock=function()
++                probes=probes+1
++                if mode=="throw" or (mode=="start throw" and probes==2) or
++                    (mode=="mid throw" and probes==4) or (mode=="end throw" and probes==19) then
++                    error("PRIVATE-CLOCK-PAYLOAD")
++                end
++                if mode=="nan" or (mode=="mid nan" and probes==4) then return 0/0 end
++                if mode=="infinity" then return math.huge end
++                if mode=="type" then return "PRIVATE-CLOCK-TYPE" end
++                if mode=="backward" and probes==4 then return -1 end
++                return probes
++            end
++            local restored=timingRestoration(c)
++            local a,b,r=Tests.MeasureScan(c,mode~="missing" and clock or nil); restored()
++            eq(a,true); eq(b,"PRIVATE-REASON"); eq(scans,1); eq(work,1)
++            eq(r.status,"unavailable"); eq(r.totalMs,nil); eq(r.otherMs,nil); eq(r.stages,nil)
++            local expected=mode=="missing" and "clock missing" or
++                ((mode=="throw" or mode=="start throw" or mode=="mid throw" or mode=="end throw") and "clock error" or
++                (mode=="backward" and "clock backward" or "clock nonfinite"))
++            eq(r.reason,expected); eq(probes,mode=="missing" and 0 or
++                (mode=="start throw" and 2 or (mode=="end throw" and 19 or
++                ((mode=="backward" or mode=="mid throw" or mode=="mid nan") and 4 or 1))))
++            eq(Tests.FormatScanTiming(r),"scan2 timings unavailable ("..expected..")"); privateTimingReport(r)
++        end
++    end)
++end)
++case("K4 zero-resolution clock is observed but finite arithmetic overflow is unavailable",function()
++    timingFixture(function(c)
++        local restored=timingRestoration(c)
++        local a,b,r=Tests.MeasureScan(c,function() return 0 end); restored()
++        eq(a,true); eq(b,"PRIVATE-REASON"); eq(r.status,"observed"); eq(r.totalMs,0)
++        for _,tag in ipairs(timingTags) do eq(r.stages[tag].calls,1); eq(r.stages[tag].exclusiveMs,0) end
++        c.Scan=function() return true end
++        local reads=0
++        a,b,r=Tests.MeasureScan(c,function() reads=reads+1; return reads<=2 and -1e308 or 1e308 end)
++        restored(); eq(a,true); eq(b,nil); eq(r.status,"unavailable"); eq(r.reason,"invalid partition")
++        eq(r.totalMs,nil); eq(r.stages,nil); privateTimingReport(r)
++    end)
++end)
++case("K4 probe cap stops observation at 10000 without skipping original tiny calls",function()
++    timingFixture(function(c)
++        local calls,probes=0,0
++        C.Copy=function() calls=calls+1 end
++        c.Scan=function() for _=1,5001 do C.Copy() end; return true,"PRIVATE-CAP" end
++        local restored=timingRestoration(c)
++        local a,b,r=Tests.MeasureScan(c,function() probes=probes+1; return probes end); restored()
++        eq(a,true); eq(b,"PRIVATE-CAP"); eq(calls,5001); eq(probes,10000)
++        eq(r.status,"unavailable"); eq(r.reason,"probe cap"); eq(r.stages,nil); privateTimingReport(r)
++    end)
++end)
++case("K4 depth cap bounds active frames and original recursive stub still finishes",function()
++    timingFixture(function(c)
++        local calls=0
++        C.Copy=function(n) calls=calls+1; if n>1 then return C.Copy(n-1) end; return "leaf",nil,false end
++        local depth=63
++        c.Scan=function() local a,b,d=C.Copy(depth); eq(a,"leaf"); eq(b,nil); eq(d,false); return true end
++        local restored=timingRestoration(c)
++        local a,_,r=Tests.MeasureScan(c,tickClock()); restored()
++        eq(a,true); eq(calls,63); eq(r.status,"observed"); eq(r.stages.C.calls,63)
++        depth=70; calls=0
++        a,_,r=Tests.MeasureScan(c,tickClock()); restored()
++        eq(a,true); eq(calls,70); eq(r.status,"unavailable"); eq(r.reason,"depth cap")
++        eq(r.totalMs,nil); eq(r.stages,nil); privateTimingReport(r)
++    end)
++end)
++case("K4 repeated measurements have independent primitive reports and bounded private notes",function()
++    timingFixture(function(c)
++        local restored=timingRestoration(c)
++        local _,_,a=Tests.MeasureScan(c,tickClock()); restored()
++        local _,_,b=Tests.MeasureScan(c,tickClock()); restored()
++        assert(a~=b); assert(a.stages~=b.stages); assert(a.stages.C~=b.stages.C)
++        eq(a.totalMs,b.totalMs); eq(a.stages.C.calls,1); eq(b.stages.C.calls,1)
++        a.stages.C.calls=999; eq(b.stages.C.calls,1); privateTimingReport(b)
++        for _,n in ipairs({99999,99999.01,1e308}) do
++            b.totalMs=n; b.otherMs=n
++            for _,tag in ipairs(timingTags) do b.stages[tag].exclusiveMs=n end
++            local note=Tests.FormatScanTiming(b)
++            assert(#note<=112); assert(not note:find("[|%c]")); assert(not note:find("PRIVATE",1,true))
++            assert(note:find(n>99999 and "T=>99999" or "T=99999.0",1,true))
++        end
++        for _,bad in ipairs({false,{status="unavailable",reason="PRIVATE|\001"},{status="observed"},
++            setmetatable({status="observed"},{})}) do
++            local note=Tests.FormatScanTiming(bad); eq(note,"scan2 timings unavailable (invalid report)")
++        end
++        b.totalMs=0/0; eq(Tests.FormatScanTiming(b),"scan2 timings unavailable (invalid report)")
++    end)
++end)
++case("K4 runner annotations last clean note normal fail reset and unchanged unannotated output",function()
++    local r=Tests.NewRunner({
++        {name="noted",fn=function(cp,annotate) annotate("discard"); cp("boundary"); annotate("last|\001note") end},
++        {name="plain",fn=function() end},
++        {name="noted fail",fn=function(_,annotate) annotate(string.rep("z",200)); error("fixture failure",0) end},
++    })
++    r:Step(); eq(r.steps,1); eq(r.label,"boundary"); eq(r.passed,0)
++    r:Step(); eq(r.steps,2); eq(r.passed,1); eq(r.lastLine,"PASS noted; last  note")
++    eq(r.label,"case return; last  note")
++    r:Step(); eq(r.steps,3); eq(r.lastLine,"PASS plain"); eq(r.label,"case return")
++    r:Step(); eq(r.steps,4); eq(r.failed,1); eq(r.passed,2); eq(r.completed,true)
++    eq(#r.label,128); eq(r.lastLine,"FAIL noted fail: fixture failure; "..string.rep("z",128))
++    r:Step(); eq(r.steps,4); eq(r.lastLine,nil)
++    r=Tests.NewRunner({{name="cancel note",fn=function(cp,annotate) annotate("retired"); cp("paused") end}})
++    r:Step(); r:Cancel(); r:Step(); eq(r.label,"paused"); eq(r.passed,0); eq(#r.lines,0)
++end)
++case("K4 annotation rejects shared overrides and measurement restores before note without extra steps",function()
++    for _,which in ipairs({"apply","evaluate"}) do
++        local apply,evaluate=C.Apply,K.Evaluate; local continued=false
++        local r=Tests.NewRunner({{name="guard",fn=function(_,annotate)
++            if which=="apply" then C.Apply=function() end else K.Evaluate=function() end end
++            local ok,why=pcall(function() annotate("must not escape"); continued=true end)
++            C.Apply=apply; K.Evaluate=evaluate
++            assert(ok,why)
++        end}})
++        r:Step(); eq(C.Apply,apply); eq(K.Evaluate,evaluate)
++        eq(continued,false); eq(r.failed,1); eq(r.steps,1); eq(r.label,"case return")
++        assert(r.lastLine:find("unsafe annotation",1,true))
++    end
++    local r=Tests.NewRunner({{name="after cleanup",fn=function(_,annotate)
++        local report
++        timingFixture(function(c)
++            local restored=timingRestoration(c)
++            local a,b; a,b,report=Tests.MeasureScan(c,tickClock()); restored(); eq(a,true)
++        end)
++        annotate(Tests.FormatScanTiming(report))
++    end}})
++    r:Step(); eq(r.steps,1); eq(r.passed,1); eq(r.completed,true)
++    assert(r.label:find("case return; scan2 ms excl T=",1,true)); assert(r.lastLine:find("; scan2 ms excl T=",1,true))
++end)
++case("K4 unchanged command normal fail and slow-stop retain annotated final identity counts",function()
++    for _,mode in ipairs({"normal","fail","slow","slow fail"}) do
++        local state; local calls=0; local note="scan2 timings unavailable (clock missing)"
++        local cmd,_,s=schedulerFixture({{name="annotated atomic",fn=function(_,annotate)
++            calls=calls+1; annotate(note)
++            if mode=="slow" or mode=="slow fail" then state.now=state.now+101 end
++            if mode=="fail" or mode=="slow fail" then error("fixture failure",0) end
++        end}})
++        state=s; local r=cmd:Run("selftest"); s:Tick()
++        local slow=mode=="slow" or mode=="slow fail"
++        local fail=mode=="fail" or mode=="slow fail"
++        s:CheckStopped(slow and "incomplete" or "complete")
++        eq(calls,1); eq(r.steps,1); eq(r.passed,fail and 0 or 1); eq(r.failed,fail and 1 or 0)
++        eq(cmd.selftestSummary.total,1); eq(cmd.selftestSummary.index,1); eq(cmd.selftestSummary.unit,1)
++        eq(cmd.selftestSummary.label,"case return; "..note)
++        assert(cmd.selftestSummary.maxIdentity:find("[case return; "..note.."]",1,true))
++        local text=table.concat(s.chat,"\n")
++        assert(text:find("[case return; "..note.."]",1,true))
++        if mode=="slow" then assert(not text:find("PASS annotated atomic",1,true))
++        else assert(text:find((fail and "FAIL " or "PASS ").."annotated atomic",1,true)) end
++        eq(cmd.selftestSummary.maxUnit,slow and 101 or 0)
++        local n=#s.chat; s:Tick(); eq(#s.chat,n); eq(calls,1); eq(r.steps,1)
++    end
++end)
++
+ function Tests.Run(cases)
+     local runner=Tests.NewRunner(cases)
+     while runner.status=="running" do runner:Step() end
+# docs/dashboard/README.md baselineSHA256=2fb479cf06ddbb79f0680b3932d515421624c4427ecf19c4b3e08cd47dfee43d targetSHA256=d3080e75386787d5c75fbb54dce1ae0185700b0b42105cc7249e6ccd51c6fdcd
+--- K3f/docs/dashboard/README.md
++++ K4/docs/dashboard/README.md
+@@ -2,11 +2,12 @@
+ 
+ **PARTIAL, not released/accepted.** Read [evidence](evidence.md) before testing.
+ **Current selftest paused:** latest user run stopped **INCOMPLETE,81 passed/0 failed
+-of123**, case81 combined unit385.3ms (wall73206.2ms), exceeding the unchanged100ms
+-limit.81 cases completed PASS,42 remain uncompleted; case80 passed this run and new
+-cases112–123 remain unexecuted. Individual Scan/Core/ViewModel timings were not
+-measured. K3f's17 outer checkpoints in cases81–82 await independent review;
+-**do not rerun unchanged K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
++of123**, case81 final second-Scan/assert unit122.4ms (wall67041.5ms), exceeding the
++unchanged100ms limit.42 cases remain uncompleted; case80 passed this run and new
++cases112–123 remain unexecuted. Internal Scan stages were not measured. K3f was
++static-reviewed; K4 now delivers **measurement only**, not a production fix or
++performance PASS. Its fixture timing/terminal-note plumbing awaits independent review.
++**Do not rerun unchanged K3f/K3e/K3d/K3c/K3b/K3a/K3 or the old synchronous suite**.
+ Historical K3d64/123 stopped at case64 combined100.5ms (wall102289.1ms), with59
+ uncompleted and case80 NOT REACHED in that separate run.
+ Historical K3c79/123 stopped at case80 initial unit123.1ms (wall70914.9ms); that
+@@ -48,7 +49,7 @@
+   unready contexts preserve saved snapshots with a refresh explanation.
+ - `/ca selftest` starts frame-stepped isolated injected fixtures out of combat,
+   without Login/live collection/real DB mutations. Repeating it reports status, not
+-  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K3f review gate below.
++  a second run. `/ca selftest cancel` stops INCOMPLETE. See the K4 review gate below.
+ - `/ca knowledgecheck` captures read-only, provisional Midnight Inscription evidence
+   into a local copy window, out of combat only. No scan or snapshot write is required.
+ 
+@@ -170,7 +171,62 @@
+ 
+ ## Primary/user runtime checklist (not agent-run)
+ 
+-### K3f cases81–82 scan/reload checkpoints (current; user only AFTER independent review)
++### K4 stage measurement (current; user only AFTER independent review)
++
++This changes **only SelfTests.lua**, not Core/Collectors/Knowledge/KnowledgeCheck,
++Commands, snapshot policy, limits or saved data. All123 old ordered cases/assertions,
++both actual case81 Scans and the full35-path native-shaped fixture remain. Eleven
++small instrumentation regressions are appended: **134 definitions**, not a promised
++pass. The measurement wrappers are temporary and synchronous; all real fixture
++validation, copying, evaluation and the atomic write still execute. No yields, notes
++or output occur while bindings are overridden; cleanup precedes annotation even on
++errors. Unexpected Scan errors become `timed scan failed (payload omitted)` after
++cleanup; ordinary returned success/false/reason are unchanged.
++
++1. **Wait for primary's independent K4 review and coordination.** Fully quit WoW and
++   back up `WTF`, including production/diagnostic SavedVariables. Already on K3f:
++   replace **only `CraftArmy/SelfTests.lua`** with the reviewed K4 file. Keep every
++   other module, `CraftArmyDB`, all SavedVariables and diagnostics unchanged. Same
++   version0.2.0-mvp/Interface120105/schema1; no reset or profiling setting changes.
++2. Login/reload and explicitly run **`/ca selftest` out of combat**. STARTED reports
++   the actual count (currently134). Do not filter cases, reduce work or raise the
++   unchanged100ms/10000-step limits. Cancellation remains `/ca selftest cancel`;
++   combat/clock/slow/error stops never automatically resume.
++3. Share the case81 **PASS line containing `scan2`** on ordinary completion, or the
++   final **INCOMPLETE summary containing `[case return; scan2 ...]`** on a slow stop.
++   The unchanged Commands driver may suppress a slow PASS line; its terminal/max
++   identity still carries the note. Also share the final COMPLETE/INCOMPLETE counts,
++   wall/max-unit timing and case/unit/label, failures, warning recurrence and whether
++   the game remained interactive. If stopped **before case81's final step**, no report
++   means **NOT MEASURED**; do not estimate timings or rerun unchanged to force it.
++4. Share a new stop once; **no unchanged-version retry**, threshold raise, skip or
++   automatic resume. Keep native bars/hover/unspent comparisons paused until primary
++   records satisfactory safe full completion/performance evidence.
++
++The fixed note is `scan2 ms excl T=... O=... A=... C=... K=... E=... G=... B=... R=...`
++(milliseconds, one decimal; `>99999` is a bounded overflow display). **T is the
++probe-inclusive second Scan**, not the whole runner unit or uninstrumented production
++latency. O=Core.Open, A=Core.Apply, C=Core.Copy, K=fixture Knowledge, E=Knowledge.Evaluate,
++G=fixture Gear, B=fixture Context. These seven are **exclusive** totals: nested Open/
++Copy are subtracted from Apply rather than counted twice. R is residual Scan work/
++probe gaps, so stage exclusives+R partition T before display rounding. Reports also
++have inclusive durations and call counts but retain no fixture/API/error payloads.
++Probe overhead and client clock resolution can affect attribution (observed zero is
++not evidence that a stage costs nothing); no bottleneck or production optimization
++is established by delivery. Wrapper installation/cleanup and post-Scan assertions/
++formatting/runner overhead are outside T but inside the measured runner unit.
++
++Only at case81's final step, timing borrows native `debugprofilestop`, else
++`GetTimePreciseSec` converted to milliseconds. There is no profiler reset, timer, CVar,
++error-handler or production hook. Missing/throwing/nonfinite/backward clocks,10000
++timing probes or64 active timing frames produce fixed `scan2 timings unavailable
++(reason)`, **not zero or partial-success metrics**. The original fixture Scan still
++runs once and its ordinary result is preserved, even if observation fails. Reports
++are local, never SavedVariables/globals. Local Lua/native K4 execution is **NOT RUN**;
++Python structure checks and new stub regressions do not establish client API behavior.
++Production optimization48 remains blocked on reviewed user timings and settled design.
++
++### K3f cases81–82 scan/reload checkpoints (historical instructions)
+ 
+ The historical user **96 passed / 0 failed** is functional assertion evidence only:
+ the accompanying extended lockup and69x execution-limit warning make safe performance
