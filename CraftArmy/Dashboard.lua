@@ -1,5 +1,6 @@
 local _, NS = ...
 local Dashboard, V, C, D = {}, NS.ViewModel, NS.Core, NS.Data
+local loadedDashboardBuild="0.2.0-mvp+p04.1"
 NS.Dashboard = Dashboard
 local I=V.index
 local S=NS.Storage
@@ -108,13 +109,53 @@ function Dashboard.New(env, collector)
     local pendingScroll,updateBusy
     local scrollRequest=0
     local guidQueryVersion=0
+    -- R02: private paint ownership, never observations or model state. Only the
+    -- twelve visible widget/row pairs can lend decorations to ordinary pending work.
+    local lastPaint,continuity
+    local handoffBusy
+    local keepPaint={}
+    local function preparationCurrent(owner)
+        return not owner or (owner.version==buildVersion and owner.render==renderVersion and
+            owner.hover==hoverVersion and owner.scroll==scrollRequest)
+    end
+    -- A public wrapper need only forward the original method arguments. Private
+    -- ownership crosses that wrapper in a scoped, one-shot dispatch, NOT ambient
+    -- inheritance: production entry consumes it before any native callback.
+    local dispatch={}
+    local cleanupFailedPreparation
+    local productionStopBuild
+    local function consumeDispatch(method)
+        local ticket=dispatch[method]
+        dispatch[method]=nil
+        if ticket then ticket.consumed=true end
+        return ticket
+    end
+    local function ownedCall(method,owner,permit,...)
+        if not preparationCurrent(owner) then return false end
+        local previous=dispatch[method]
+        local ticket={owner=owner,permit=permit}
+        dispatch[method]=ticket
+        local ok,a,b=pcall(self[method],self,...)
+        if dispatch[method]==ticket or dispatch[method]==nil then
+            -- Restore only an unconsumed outer invocation, even if retired: its
+            -- own entry must reject its stale owner, not become an unowned call.
+            dispatch[method]=previous and not previous.consumed and previous or nil
+        end
+        if not ok then
+            if owner and cleanupFailedPreparation then pcall(cleanupFailedPreparation,owner) end
+            error(a,0)
+        end
+        return a,b
+    end
     local function capturePlayerGUID()
         guidQueryVersion=guidQueryVersion+1
         local invocation,version,options,db=guidQueryVersion,buildVersion,self.options,collector.db
+        local render,hover,scroll=renderVersion,hoverVersion,scrollRequest
         local ok,guid=pcall(function()
             if type(env.UnitGUID)=="function" then return env.UnitGUID("player") end
         end)
-        if invocation~=guidQueryVersion or version~=buildVersion or options~=self.options or db~=collector.db then return false end
+        if invocation~=guidQueryVersion or version~=buildVersion or options~=self.options or db~=collector.db or
+            render~=renderVersion or hover~=hoverVersion or scroll~=scrollRequest then return false end
         if not ok or type(guid)~="string" or #guid==0 or #guid>128 or guid:find("[%c]") then guid=nil end
         self.options.currentPlayerGUID=guid
         return true
@@ -127,7 +168,10 @@ function Dashboard.New(env, collector)
     local historical="Previous saved view / last observed; "
     local retainedHint="Previous saved values pending replacement (or refresh failed). Detailed freshness and gear tooltips are temporarily unavailable."
     local function validSource(db)
-        return db~=nil and collector.db==db and S.IsHandle(db) and S.Check(db)==db
+        local ok,valid=pcall(function()
+            return db~=nil and collector.db==db and S.IsHandle(db) and S.Check(db)==db
+        end)
+        return ok and valid and collector.db==db
     end
     local function context()
         return {db=collector.db,fresh=collector.fresh,serial=collector.serial,revision=collector.revision,
@@ -140,26 +184,188 @@ function Dashboard.New(env, collector)
         for k,v in pairs(self.options) do if c.options[k]~=v then return false end end
         return true
     end
+    local function sameOptions(a,b)
+        for k,v in pairs(a) do if b[k]~=v then return false end end
+        for k,v in pairs(b) do if a[k]~=v then return false end end
+        return true
+    end
+    local function handoff(ctx)
+        local ok,h=pcall(function()
+            if type(collector.DashboardHandoff)~="function" then return end
+            local h=collector:DashboardHandoff()
+            if type(h)~="table" or getmetatable(h)~=nil or
+                (h.kind~="requested" and h.kind~="observed") or
+                h.db~=ctx.db or h.fresh~=ctx.fresh or h.serial~=ctx.serial or
+                h.revision~=ctx.revision or h.storeRevision~=ctx.storeRevision or
+                not C.Integer(h.serial) or not C.Integer(h.revision) or
+                (h.kind=="observed" and (type(h.guid)~="string" or #h.guid==0 or
+                    not C.Integer(h.id,1) or not C.Integer(h.generation,1))) or not matches(ctx) then return end
+            return h
+        end)
+        return ok and h or nil
+    end
+    local function provenance(g)
+        local f=g.fields and g.fields.concentration
+        local l,a=f and f.last,f and f.attempt
+        local v=l and l.value
+        if not l or not a or l.status~="observed" or a.status~="observed" or type(v)~="table" then return end
+        return {status=l.status,generation=l.generation,observedAt=l.observedAt,source=l.source,build=l.build,
+            attemptedStatus=a.status,attemptedAt=a.attemptedAt,attemptedSource=a.source,
+            id=v.id,quantity=v.quantity,maxQuantity=v.maxQuantity,
+            rechargingCycleDurationMS=v.rechargingCycleDurationMS,rechargingAmountPerCycle=v.rechargingAmountPerCycle}
+    end
+    local function activeIdentity(g,r)
+        local id=g and g.identity
+        local cap=id and D.Capabilities(id)
+        return cap and not r.archived and not g.archived and g.generation==r.generation and
+            id.skillLineID==r.id and id.profession==r.professionFamily and cap
+    end
+    local function rowProvenance(r,p)
+        local s,v=r.concentrationState,r.concentrationValue
+        return p and s and v and s.status=="observed" and s.lastStatus=="observed" and
+            s.observedAt==p.observedAt and s.attemptedAt==p.attemptedAt and s.source==p.attemptedSource and
+            v.id==p.id and v.quantity==p.quantity and v.maxQuantity==p.maxQuantity and
+            v.rechargingCycleDurationMS==p.rechargingCycleDurationMS and v.rechargingAmountPerCycle==p.rechargingAmountPerCycle
+    end
+    local function continuityBase(q)
+        local function owned()
+            return q and continuity==q and q.version==buildVersion and q.cache==lastPaint and
+                q.completed==self.completed and q.rows==self.rows and q.frame==self.frame and
+                q.optionsRef==self.options and sameOptions(q.options,self.options) and
+                q.context.db==collector.db and q.context.fresh==collector.fresh and
+                q.context.serial==collector.serial and q.context.revision==collector.revision and
+                (not q.job or self.buildJob==q.job) and
+                preparationCurrent(q.preparing)
+        end
+        return owned() and q.context.storeRevision==S.Revision(collector.db) and owned()
+    end
+    local function continuityCurrent(q)
+        if not continuityBase(q) then return false end
+        if not matches(q.context) or not continuityBase(q) then return false end
+        if q.signal and (handoff(q.context)~=q.signal or not continuityBase(q)) then return false end
+        local shown=q.frame:IsShown()
+        if not continuityBase(q) or not shown then return false end
+        local blocked=combat()
+        if not continuityBase(q) or blocked then return false end
+        for _,entry in ipairs(q.entries) do
+            local r=entry.row
+            if entry.widget.row~=r or r.guid~=entry.guid or r.id~=entry.id or r.generation~=entry.generation or
+                r.professionFamily~=entry.family or r.archived or
+                ((entry.estimate or entry.cell) and entry.paint.provenance and
+                    not rowProvenance(r,entry.paint.provenance)) then return false end
+            local token=S.Token(q.context.db,entry.guid,entry.id)
+            if not continuityBase(q) or not token or token~=entry.token then return false end
+        end
+        return continuityBase(q)
+    end
+    local function preserved(q,w,r)
+        if not q or not continuityCurrent(q) then return end
+        local entry=q.byWidget[w]
+        if entry and entry.row==r and w.row==r then return entry end
+    end
+    local function prepareContinuity(ctx,version,owner,previous,requiredSignal)
+        local cache=lastPaint
+        if not cache or cache.completed~=self.completed or cache.rows~=self.rows or
+            cache.db~=ctx.db or not ctx.options.currentPlayerGUID or ctx.options.archived or
+            not sameOptions(cache.options,ctx.options) then return end
+        local signal=handoff(ctx)
+        if not preparationCurrent(owner) then return end
+        if requiredSignal and signal~=requiredSignal then lastPaint=nil; return end
+        local q={version=version,cache=cache,completed=self.completed,rows=self.rows,frame=self.frame,
+            context=ctx,options=ctx.options,optionsRef=self.options,offset=self.offset,entries={},byWidget={},
+            preparing=owner,signal=signal}
+        continuity=q
+        local ok=pcall(function()
+            assert(continuityCurrent(q),"Unsafe pending paint")
+            for _,entry in ipairs(cache.entries) do
+                assert(continuityCurrent(q),"Superseded pending paint")
+                local token=S.Token(ctx.db,entry.guid,entry.id)
+                assert(token and continuityCurrent(q),"Unowned row")
+                local g,why=S.Active(ctx.db,entry.guid,entry.id)
+                assert(continuityCurrent(q) and S.Token(ctx.db,entry.guid,entry.id)==token and
+                    continuityCurrent(q),"Changed row during read")
+                assert(not (type(why)=="string" and why:find("Storage rejected:",1,true)),"Invalid active row")
+                local cap=activeIdentity(g,entry.row)
+                if cap and entry.widget.row==entry.row and entry.row.guid==entry.guid and entry.row.id==entry.id and
+                    entry.row.generation==entry.generation and entry.row.professionFamily==entry.family then
+                    local p=provenance(g)
+                    local e={row=entry.row,widget=entry.widget,token=token,guid=entry.guid,id=entry.id,
+                        generation=entry.generation,family=entry.family,
+                        dot=entry.dot and entry.row.guid==ctx.options.currentPlayerGUID,
+                        estimate=entry.estimate and cap.concentration and p and entry.provenance and
+                            sameOptions(p,entry.provenance),paint=entry}
+                    local prior=previous and previous.cache==cache and previous.byWidget[entry.widget]
+                    if cap.concentration and p and prior and prior.cell and
+                        sameOptions(p,prior.cell.provenance) then
+                        e.cell=prior.cell; e.estimate=prior.estimate
+                    elseif cap.concentration and p and p.generation==entry.generation and signal and signal.kind=="observed" and
+                        signal.guid==entry.guid and signal.id==entry.id and signal.generation==entry.generation and
+                        (not entry.provenance or not sameOptions(p,entry.provenance)) then
+                        -- Private scalar display only. Never alter cached rows or observations.
+                        e.cell={provenance=p,value={id=p.id,quantity=p.quantity,maxQuantity=p.maxQuantity,
+                            rechargingCycleDurationMS=p.rechargingCycleDurationMS,
+                            rechargingAmountPerCycle=p.rechargingAmountPerCycle}}
+                    end
+                    q.entries[#q.entries+1]=e; q.byWidget[entry.widget]=e
+                end
+            end
+            assert(continuityCurrent(q),"Changed pending paint")
+            if signal then assert(handoff(ctx)==signal and continuityCurrent(q),"Changed handoff") end
+        end)
+        if not ok then
+            if continuity==q then continuity=nil; lastPaint=nil end
+            return
+        end
+        return q
+    end
+    local function validateContinuity()
+        local q=continuity
+        if not q then return end
+        local render,hover,scroll=renderVersion,hoverVersion,scrollRequest
+        local ok,valid=pcall(continuityCurrent,q)
+        if (not ok or not valid) and continuity==q and q.version==buildVersion and
+            render==renderVersion and hover==hoverVersion and scroll==scrollRequest then
+            -- Only explicit ordinary collection drift may replace a pending job.
+            -- One attempt per callback; a changed-again/reentrant signal fails closed.
+            if not handoffBusy then
+                local checked,signal=pcall(function()
+                    if not matches(q.context) then return handoff(context()) end
+                end)
+                if checked and signal and continuity==q and q.version==buildVersion and
+                    render==renderVersion and hover==hoverVersion and scroll==scrollRequest then
+                    handoffBusy=true
+                    local worked=pcall(ownedCall,"StartBuild",nil,signal)
+                    handoffBusy=nil
+                    if worked and continuity~=q then return end
+                end
+            end
+            if continuity~=q or q.version~=buildVersion or render~=renderVersion or
+                hover~=hoverVersion or scroll~=scrollRequest then return end
+            self:Retain("refresh continuity invalidated; showing last observed values")
+        end
+    end
     function self:ClearScope()
         self.selected=nil; self.confirmation=nil
         if self.confirmPanel then self.confirmPanel:Hide() end
     end
     function self:DropCompleted()
+        continuity=nil; lastPaint=nil
         pendingScroll=nil
         local version=buildVersion
         self.completed=nil; self.restoreKey=nil; self.rows={}; self.retained=false
-        self:ClearScope()
+        pcall(self.ClearScope,self)
         if version~=buildVersion then return end
         -- Detached values must disappear even if a later formatting call fails.
         for _,w in ipairs(self.widgets) do
             w.row=nil; pcall(w.Hide,w); if version~=buildVersion then return end
         end
     end
-    local function demoteVisible()
+    local function demoteVisible(owner)
         local version,completed,rows,render=buildVersion,self.completed,self.rows,renderVersion
         local function owns()
-            return version==buildVersion and render==renderVersion and completed==self.completed and rows==self.rows and
-                (not completed or validSource(completed.context.db)) and version==buildVersion
+            return preparationCurrent(owner) and version==buildVersion and render==renderVersion and completed==self.completed and rows==self.rows and
+                (not completed or validSource(completed.context.db)) and version==buildVersion and
+                render==renderVersion and completed==self.completed and rows==self.rows and preparationCurrent(owner)
         end
         -- Presentation only: inspect at most12*14 current labels, not the row list.
         -- Every call is isolated so an early broken label cannot strand later !s.
@@ -169,6 +375,8 @@ function Dashboard.New(env, collector)
                 local label=cell.label
                 local ok,value=pcall(label.GetText,label)
                 if not owns() then return end
+                -- Native FontString returns nil for empty text.
+                if ok and value==nil then value="" end
                 if ok and type(value)=="string" then
                     local safe,n=value:gsub("|cffffbb00!|r","|cff999999!|r")
                     if n>0 then ok=pcall(label.SetText,label,safe) end
@@ -179,7 +387,14 @@ function Dashboard.New(env, collector)
                     if not owns() then return end
                     ok=ok and colored
                 end
-                if cell.estimate then
+                local q=continuity
+                local checked,kept=pcall(preserved,q,w,w.row)
+                if not owns() then return end
+                if not checked then
+                    if continuity==q then continuity=nil; lastPaint=nil end
+                    kept=nil
+                end
+                if cell.estimate and not (kept and (kept.estimate or kept.cell)) then
                     local hidden=pcall(cell.estimate.Hide,cell.estimate)
                     if not owns() then return end
                     if hidden then
@@ -198,7 +413,7 @@ function Dashboard.New(env, collector)
                     if not owns() then return end
                     ok=ok and reset
                 end
-                if cell.currentDot then
+                if cell.currentDot and not (kept and kept.dot) then
                     local hidden=pcall(cell.currentDot.Hide,cell.currentDot)
                     if not owns() then return end
                     if hidden then
@@ -212,6 +427,7 @@ function Dashboard.New(env, collector)
                     end
                 end
                 if not ok then
+                    continuity=nil; lastPaint=nil
                     local hidden=pcall(label.Hide,label)
                     if not owns() then return end
                     if hidden then
@@ -228,21 +444,66 @@ function Dashboard.New(env, collector)
         end
     end
     function self:Retain(why)
+        local ticket=consumeDispatch("Retain")
+        local owner,permit=ticket and ticket.owner,ticket and ticket.permit
+        if not preparationCurrent(owner) then return false end
+        if not permit or permit~=continuity then continuity=nil; lastPaint=nil end
         pendingScroll=nil
         renderVersion=renderVersion+1; estimateTick={elapsed=0}
-        local version,hover=buildVersion,hoverVersion
+        if owner then owner.render=renderVersion end -- Exact intentional mutation, before any callback.
+        local version,hover,render,completed,rows=buildVersion,hoverVersion,renderVersion,self.completed,self.rows
+        local function owns()
+            return preparationCurrent(owner) and version==buildVersion and render==renderVersion and completed==self.completed and rows==self.rows
+        end
         if self.completed and not validSource(self.completed.context.db) then self:DropCompleted() end
-        if version~=buildVersion then return end
+        if not owns() then return end
         if self.selected then self.restoreKey=self.selected.key end
         self.retained=self.completed~=nil
         self.presentation=why
-        if self.retained then demoteVisible() end
-        if version~=buildVersion then return end
+        if self.retained then demoteVisible(owner) end
+        if not owns() then return end
         if self.completed and not validSource(self.completed.context.db) then self:DropCompleted() end
-        if version~=buildVersion then return end
-        self:ClearScope()
-        if version~=buildVersion then return end
-        if hover==hoverVersion and env.GameTooltip then env.GameTooltip:Hide() end
+        if not owns() then return end
+        pcall(self.ClearScope,self)
+        if not owns() then return end
+        if hover==hoverVersion and env.GameTooltip then pcall(env.GameTooltip.Hide,env.GameTooltip) end
+    end
+    -- Failure cleanup must not call the public wrapper that just threw (nor a
+    -- different throwing wrapper). Capture the production path privately.
+    local productionRetain=self.Retain
+    cleanupFailedPreparation=function(owner)
+        if not preparationCurrent(owner) then
+            -- Retire only this failed invocation's still-armed private record.
+            -- A newer completed paint has a different cache; never demote it or
+            -- alter the newer hover/scroll/job/status because the old call threw.
+            local q=continuity
+            if q and q.preparing==owner then
+                if lastPaint==q.cache then lastPaint=nil end
+                continuity=nil
+            end
+            return
+        end
+        continuity=nil; lastPaint=nil -- Revoke before any cleanup callback.
+        if self.buildJob then
+            -- A pre-entry StopBuild failure can leave its previous async job
+            -- alive. Retire that owned work privately before historical demotion.
+            local previous=dispatch.StopBuild
+            local ticket={owner=owner}
+            dispatch.StopBuild=ticket
+            pcall(productionStopBuild,self)
+            if dispatch.StopBuild==ticket or dispatch.StopBuild==nil then
+                dispatch.StopBuild=previous and not previous.consumed and previous or nil
+            end
+            if not preparationCurrent(owner) then return end
+        end
+        local previous=dispatch.Retain
+        local ticket={owner=owner}
+        dispatch.Retain=ticket
+        local ok=pcall(productionRetain,self,"refresh failed during preparation; showing last observed values. Refresh to retry")
+        if dispatch.Retain==ticket or dispatch.Retain==nil then
+            dispatch.Retain=previous and not previous.consumed and previous or nil
+        end
+        return ok and preparationCurrent(owner)
     end
     function self:DisplayStatus()
         if self.retained then return historical..(self.presentation or "updating")..
@@ -601,6 +862,7 @@ function Dashboard.New(env, collector)
         init(frame,"SetScript","OnUpdate",function(_,elapsed)
             if updateBusy then return end
             updateBusy=true
+            validateContinuity()
             local tick,version,render,rows,completed=estimateTick,buildVersion,renderVersion,self.rows,self.completed
             local function current()
                 return tick==estimateTick and version==buildVersion and render==renderVersion and
@@ -661,7 +923,7 @@ function Dashboard.New(env, collector)
         end
         local titleInset=self.titleIcon and 28 or 0
         self.title=text(frame,G.contentWidth-30-titleInset); self.title:SetPoint("TOPLEFT",G.margin+titleInset,-8)
-        self.title:SetText("CraftArmy — observed crafting snapshots")
+        self.title:SetText("CraftArmy — observed profession snapshots")
         self.close=button(frame,"X",22,function() frame:Hide() end)
         self.close:SetPoint("TOPRIGHT",-G.margin,-5)
         self.statusArea=env.CreateFrame("Frame",nil,frame); self.statusArea:SetSize(G.contentWidth,16)
@@ -671,6 +933,7 @@ function Dashboard.New(env, collector)
             self:ActionsReady()
             local lines={self:DisplayStatus(),"Raw status: "..(collector.reason==nil and "" or tostring(collector.reason))}
             if collector.blockReason~=nil then lines[#lines+1]="Blocked: "..tostring(collector.blockReason) end
+            lines[#lines+1]="Loaded dashboard build: "..loadedDashboardBuild
             focusedTooltip(w,{self:DisplayStatus()},lines)
         end)
         self.statusArea:SetScript("OnLeave",function() if env.GameTooltip then env.GameTooltip:Hide() end end)
@@ -805,8 +1068,8 @@ function Dashboard.New(env, collector)
                     local r=origin.row; if not r then return end
                     local down=diagnostics()
                     if not hoverReady(origin) then abortHover(widget,origin); return end
-                    if not down and (col==I.Moxie or col==I.Unspent or col==I.LastUpdated or
-                        col==I.Stat or col==I.Enchant) then
+                    if not down and not (r.notApplicableColumns and r.notApplicableColumns[col]) and
+                        (col==I.Moxie or col==I.Unspent or col==I.LastUpdated or col==I.Stat or col==I.Enchant) then
                         if env.GameTooltip then
                             env.GameTooltip:ClearLines()
                             if hoverReady(origin) then env.GameTooltip:Hide() else abortHover(widget,origin) end
@@ -817,7 +1080,7 @@ function Dashboard.New(env, collector)
                     local gear=role and r.gear[role] or ((col==I.Stat or col==I.Enchant) and r.gear.tool)
                     local lines=gear and gear.tooltip or {r.cells[I.Name].."-"..r.cells[I.Realm],r.cells[I.Profession],unpack(r.tooltip)}
                     local summary=role and gear.summaryTooltip or r.cellTooltips[col]
-                    if col==I.Concentration and down then
+                    if col==I.Concentration and down and not r.notApplicableColumns[col] then
                         -- Transient diagnostic presentation only. Shift does not
                         -- read the clock or estimate, nor append to cached rows.
                         local detail={}
@@ -825,7 +1088,7 @@ function Dashboard.New(env, collector)
                         detail[#detail+1]="Approximate; assumes no spending and unchanged recharge rate. Not a live read."
                         lines=detail
                     end
-                    if col==I.Concentration and not down then
+                    if col==I.Concentration and not down and not r.notApplicableColumns[col] then
                         local ok,now=pcall(function() return collector:Now() end)
                         if not hoverReady(origin) then abortHover(widget,origin); return end
                         if not ok then now=nil end
@@ -906,16 +1169,33 @@ function Dashboard.New(env, collector)
         return true
     end
     function self:Render()
+        local ticket=consumeDispatch("Render")
+        local owner=ticket and ticket.owner
         if not self.frame then return end
+        if not preparationCurrent(owner) then return false end
+        if continuity and continuity.preparing and continuity.preparing~=owner then continuity=nil; lastPaint=nil end
+        if not continuity and (self.retained or self.buildJob) then lastPaint=nil end
+        if continuity and continuity.offset~=self.offset then
+            ownedCall("Retain",owner,nil,"scroll destination has no completed pending paint; showing last observed values")
+        end
+        if not preparationCurrent(owner) then return false end
         renderVersion=renderVersion+1; local render=renderVersion
+        if owner then owner.render=renderVersion end -- Only this owned increment is adopted.
         local feedback={}
         local version,rows=buildVersion,self.rows
+        local q=continuity
+        local candidate
         local function guard()
+            assert(preparationCurrent(owner),"Retired preparation paint")
             assert(renderVersion==render,"Retired paint")
             assert(buildVersion==version and self.rows==rows,"Retired render")
             assert(not self.completed or validSource(self.completed.context.db),"Detached render")
             assert(self.retained or not self.completed or matches(self.completed.context),"Superseded render")
             assert(buildVersion==version,"Retired render")
+            if q then assert(continuityCurrent(q),"Invalid pending continuity") end
+            -- Continuity validation itself crosses protected/native boundaries.
+            -- Recheck the paint owner AFTER them, before touching a widget.
+            assert(preparationCurrent(owner) and renderVersion==render and buildVersion==version and self.rows==rows,"Retired paint")
         end
         local function draw(w,method,...)
             guard(); local result=w[method](w,...); guard(); return result
@@ -924,7 +1204,47 @@ function Dashboard.New(env, collector)
         guard()
         local clockOK,now=pcall(collector.Now,collector)
         guard()
+        if q then
+            assert(clockOK,"Pending paint clock unavailable")
+            for _,entry in ipairs(q.entries) do
+                local at=entry.cell and entry.cell.provenance.observedAt or entry.paint.provenance and entry.paint.provenance.observedAt
+                if entry.cell and not entry.cell.ready then
+                    local cell=entry.cell
+                    cell.ratio,cell.red,cell.green,cell.blue=Dashboard.ConcentrationProgress(cell.value)
+                    local v=cell.value
+                    cell.label=C.Integer(v.quantity,0) and (tostring(v.quantity).."/"..
+                        (C.Integer(v.maxQuantity,1) and tostring(v.maxQuantity) or "?")) or "?"
+                    local estimate=V.ConcentrationEstimate(v,at,now)
+                    guard()
+                    if estimate and estimate.quantity>v.quantity and cell.ratio then
+                        cell.gain=math.min(1-cell.ratio,(estimate.quantity-v.quantity)/v.maxQuantity)
+                        if cell.gain>0 then cell.label="~"..estimate.quantity.."/"..estimate.maxQuantity end
+                    end
+                    entry.estimate=cell.gain and cell.gain>0 or false
+                    cell.ready=true
+                end
+                if entry.estimate and (not C.Integer(now,0) or not C.Integer(at,0) or now<at) then
+                    -- Reuse this Render's one clock, never recompute a retained
+                    -- prediction. Reject only the estimate, not player identity.
+                    -- Poison only its private paint flag until a normal paint wins.
+                    entry.estimate=false; entry.paint.estimate=false
+                    if entry.cell then
+                        entry.cell.gain=nil; entry.cell.painted=nil
+                        local v=entry.cell.value
+                        entry.cell.label=tostring(v.quantity).."/"..tostring(v.maxQuantity)
+                    end
+                end
+            end
+            guard()
+        end
         if not clockOK then now=nil end
+        if not self.retained and not self.buildJob and self.completed and clockOK then
+            local shown=draw(self.frame,"IsShown")
+            local blocked=combat(); guard()
+            if shown and not blocked then
+                candidate={db=collector.db,completed=self.completed,rows=rows,options=assert(C.Copy(self.options)),entries={}}
+            end
+        end
         self:Layout(draw); guard()
         for column,header in ipairs(self.headers) do
             draw(header.direction,"SetText",self.options.sortColumn==column and (self.options.sortDescending and "v" or "^") or "")
@@ -944,6 +1264,9 @@ function Dashboard.New(env, collector)
         for i,w in ipairs(self.widgets) do
             local r=self.rows and self.rows[self.offset+i]; w.row=r
             if r then
+                local kept=preserved(q,w,r)
+                guard()
+                local painted={widget=w,row=r,guid=r.guid,id=r.id,generation=r.generation,family=r.professionFamily}
                 draw(w,"Show")
                 for col,cell in ipairs(w.cells) do
                     local value=r.cells[col] or ""
@@ -952,33 +1275,54 @@ function Dashboard.New(env, collector)
                         ratio,red,green,blue=Dashboard.SkillProgress(r.skill)
                         if ratio==nil then value=(value:match("^(|c%x+!|r%s*)") or "").."?" end
                     elseif col==I.Concentration then
-                        local observed=r.concentrationValue
+                        local replacement=kept and kept.cell
+                        local observed=replacement and replacement.value or r.concentrationValue
                         ratio,red,green,blue=Dashboard.ConcentrationProgress(observed)
                         value=type(observed)=="table" and C.Integer(observed.quantity,0) and
                             (tostring(observed.quantity).."/"..(C.Integer(observed.maxQuantity,1) and tostring(observed.maxQuantity) or "?")) or "?"
-                        draw(cell.estimate,"SetShown",false)
-                        draw(cell.estimate,"ClearAllPoints")
-                        local estimate=not self.retained and not self.buildJob and not r.archived and
-                            V.ConcentrationEstimate(observed,r.concentrationState.observedAt,now)
-                        if estimate and estimate.quantity>observed.quantity and ratio then
-                            local gain=math.min(1-ratio,(estimate.quantity-observed.quantity)/observed.maxQuantity)
-                            if gain>0 then
-                                draw(cell.estimate,"SetPoint","LEFT",cell.bar,"LEFT",ratio*92,0)
-                                draw(cell.estimate,"SetSize",gain*92,14)
-                                draw(cell.estimate,"SetColorTexture",.10,.90,1,1)
-                                draw(cell.estimate,"SetShown",true)
-                                value="~"..estimate.quantity.."/"..estimate.maxQuantity
+                        if r.notApplicableColumns[col] then value="—" end
+                        if replacement then
+                            ratio,red,green,blue=replacement.ratio,replacement.red,replacement.green,replacement.blue
+                            value=replacement.label
+                            if not replacement.painted then
+                                if kept.estimate then
+                                    draw(cell.estimate,"ClearAllPoints")
+                                    draw(cell.estimate,"SetPoint","LEFT",cell.bar,"LEFT",ratio*92,0)
+                                    draw(cell.estimate,"SetSize",replacement.gain*92,14)
+                                    draw(cell.estimate,"SetColorTexture",.10,.90,1,1)
+                                    draw(cell.estimate,"SetShown",true)
+                                else draw(cell.estimate,"SetShown",false) end
+                            end
+                        elseif kept and kept.estimate then
+                            value=kept.paint.label
+                        else
+                            draw(cell.estimate,"SetShown",false)
+                            draw(cell.estimate,"ClearAllPoints")
+                            local estimate=not r.notApplicableColumns[col] and not self.retained and not self.buildJob and not r.archived and
+                                V.ConcentrationEstimate(observed,r.concentrationState.observedAt,now)
+                            if estimate and estimate.quantity>observed.quantity and ratio then
+                                local gain=math.min(1-ratio,(estimate.quantity-observed.quantity)/observed.maxQuantity)
+                                if gain>0 then
+                                    draw(cell.estimate,"SetPoint","LEFT",cell.bar,"LEFT",ratio*92,0)
+                                    draw(cell.estimate,"SetSize",gain*92,14)
+                                    draw(cell.estimate,"SetColorTexture",.10,.90,1,1)
+                                    draw(cell.estimate,"SetShown",true)
+                                    value="~"..estimate.quantity.."/"..estimate.maxQuantity
+                                    painted.estimate=true; painted.label=value
+                                    painted.estimateLeft=ratio*92; painted.estimateWidth=gain*92; painted.estimateHeight=14
+                                end
                             end
                         end
                     end
                     if col==I.Name then value=clean(value) end
                     if self.retained then value=value:gsub("|cffffbb00!|r","|cff999999!|r") end
-                    draw(cell.label,"SetText",value)
+                    if not (col==I.Concentration and kept and
+                        (kept.cell and kept.cell.painted or not kept.cell and kept.estimate)) then draw(cell.label,"SetText",value) end
                     draw(cell.label,"SetShown",not cell.hiddenColumn) -- Restore only visible labels.
                     if col==I.Moxie then draw(cell.label,"SetTextColor",moxieRGB(r,self.retained))
                     else draw(cell.label,"SetTextColor",1,1,1) end
                     if col==I.Name then draw(cell.label,"SetTextColor",classRGB(env,r.classToken)) end
-                    if col==I.Name then
+                    if col==I.Name and not (kept and kept.dot) then
                         local marked=not self.retained and r.isCurrentCharacter==true and r.guid==self.options.currentPlayerGUID
                         local marker=cell.currentDot
                         draw(marker,"SetShown",false); draw(marker,"SetText",marked and "•" or "")
@@ -993,20 +1337,23 @@ function Dashboard.New(env, collector)
                         end
                         draw(marker,"SetPoint","LEFT",cell.label,"LEFT",marked and width+2 or 2,0)
                         draw(marker,"SetShown",marked)
+                        painted.dot=marked; painted.dotLeft=marked and width+2 or 2
+                        painted.nameWidth=marked and 96 or 106
+                        painted.dotWidth=8; painted.dotHeight=14
                     end
                     draw(cell.fill,"SetColorTexture",0,0,0,0)
                     local role=roleColumns[col]; local gear=role and r.gear[role]
                     if gear then
                         local exists=gear.exists==true
                         local icon=exists and C.Integer(gear.icon,1)
-                        draw(cell.label,"SetText",gear.empty and "" or icon and "" or "?")
+                        draw(cell.label,"SetText",gear.notApplicable and "—" or gear.empty and "" or icon and "" or "?")
                         draw(cell.itemBorder,"SetShown",exists)
                         local color=gear.borderColor or gear.rarityColor or {.45,.50,.58}
                         draw(cell.itemBorder,"SetBackdropBorderColor",color[1],color[2],color[3],1)
                         draw(cell.itemIcon,"SetTexture",icon and gear.icon or "")
                         draw(cell.itemIcon,"SetShown",icon==true)
                         local atlas=exists and gear.qualityAtlas
-                        if atlas then draw(cell.qualityIcon,"SetAtlas",atlas) end
+                        if atlas then draw(cell.qualityIcon,"SetAtlas",atlas) else draw(cell.qualityIcon,"SetTexture","") end
                         draw(cell.qualityIcon,"SetShown",atlas~=nil and atlas~=false)
                         local rank=exists and C.Integer(gear.rank,1) and gear.rank<=5
                         draw(cell.qualityDigit,"SetText",rank and tostring(gear.rank) or "")
@@ -1020,11 +1367,15 @@ function Dashboard.New(env, collector)
                         draw(cell.enchantBadge,"SetShown",exists and gear.enchanted==true)
                     end
                     if col==I.Skill or col==I.Concentration then
-                        draw(cell.bar,"SetStatusBarColor",red,green,blue)
-                        draw(cell.bar,"SetValue",ratio or 0)
-                        draw(draw(cell.bar,"GetStatusBarTexture"),"SetShown",ratio~=nil)
+                        if not (col==I.Concentration and kept and kept.cell and kept.cell.painted) then
+                            draw(cell.bar,"SetStatusBarColor",red,green,blue)
+                            draw(cell.bar,"SetValue",ratio or 0)
+                            draw(draw(cell.bar,"GetStatusBarTexture"),"SetShown",ratio~=nil)
+                        end
+                        if col==I.Concentration and kept and kept.cell then kept.cell.painted=true end
                     end
                 end
+                if candidate then candidate.entries[#candidate.entries+1]=painted end
                 draw(w.bg,"SetColorTexture",1,1,1,self.selected and self.selected.key==r.key and 0.16 or (i%2==0 and 0.045 or 0.015))
                 for n,b in ipairs(w.bars) do
                     local t=r.trees[n]; b.tree=t
@@ -1052,13 +1403,34 @@ function Dashboard.New(env, collector)
         for n=1,3 do local b=self.footer[n]
             if type(b.SetEnabled)=="function" then draw(b,"SetEnabled",not self.retained and not self.publishing) end
         end
+        if candidate then
+            -- Validate only visible projections; never traverse the account graph.
+            for _,entry in ipairs(candidate.entries) do
+                guard()
+                local token=S.Token(candidate.db,entry.row.guid,entry.row.id); guard()
+                local g=S.Active(candidate.db,entry.row.guid,entry.row.id); guard()
+                local after=S.Token(candidate.db,entry.row.guid,entry.row.id); guard()
+                assert(token and token==after,"Changed completed paint")
+                local cap=activeIdentity(g,entry.row)
+                if not cap then entry.dot=false; entry.estimate=false end
+                local p=g and provenance(g)
+                if p and cap and cap.concentration and rowProvenance(entry.row,p) then entry.provenance=p
+                else entry.estimate=false end
+            end
+            guard()
+        end
         end)
         if scrollFeedback==feedback then scrollFeedback=nil end
-        if not ok and version==buildVersion and render==renderVersion then
-            if self.completed and not validSource(self.completed.context.db) then self:DropCompleted()
-            else self:Retain("refresh failed during rendering; Refresh to retry") end
+        if not ok and version==buildVersion and render==renderVersion and preparationCurrent(owner) then
+            local detached=self.completed and not validSource(self.completed.context.db)
+            if version~=buildVersion or render~=renderVersion or not preparationCurrent(owner) then return false end
+            if detached then self:DropCompleted()
+            else ownedCall("Retain",owner,nil,"refresh failed during rendering; Refresh to retry") end
             if version==buildVersion then pcall(self.reason.SetText,self.reason,clean(self:DisplayStatus())) end
             return false
+        end
+        if ok and version==buildVersion and render==renderVersion and preparationCurrent(owner) and not self.retained and not self.buildJob then
+            lastPaint=candidate; continuity=nil
         end
         return ok
     end
@@ -1087,47 +1459,97 @@ function Dashboard.New(env, collector)
         if self.details then self.details:Refresh() end
     end
     function self:StopBuild()
+        local ticket=consumeDispatch("StopBuild")
+        local owner,permit=ticket and ticket.owner,ticket and ticket.permit
+        if not preparationCurrent(owner) then return buildVersion end
+        local previous=continuity
+        continuity=nil
+        if permit~=keepPaint then lastPaint=nil end
         pendingScroll=nil
         estimateTick={elapsed=0}
         buildVersion=buildVersion+1; local version=buildVersion
+        if owner then owner.version=version end -- Exact owned retirement, before cancellation callbacks.
         local job,driver=self.buildJob,self.buildDriver; self.buildJob=nil
+        if previous and permit~=keepPaint then
+            -- Explicit cancellation/publication retirement cannot strand an armed
+            -- frozen paint. Revoke before any Cancel/native callback can reenter.
+            pcall(ownedCall,"Retain",owner,nil,"refresh cancelled; showing last observed values")
+        end
         if job then pcall(job.Cancel,job) end
-        if buildVersion==version and driver then
+        if buildVersion==version and preparationCurrent(owner) and driver then
             pcall(driver.SetScript,driver,"OnUpdate",nil)
-            if buildVersion==version then pcall(driver.Hide,driver) end
+            if buildVersion==version and preparationCurrent(owner) then pcall(driver.Hide,driver) end
         end
         return version
     end
+    productionStopBuild=self.StopBuild
     function self:StartBuild()
+        local ticket=consumeDispatch("StartBuild")
+        local requiredSignal=ticket and ticket.permit
         normalizeSort()
         if not capturePlayerGUID() then return end
-        if self.buildJob and self.buildJob.status=="running" and matches(self.buildContext) and self.frame:IsShown() then return end
-        local version=self:StopBuild(); if buildVersion~=version then return end
+        local entryVersion,entryRender,entryHover,entryScroll=buildVersion,renderVersion,hoverVersion,scrollRequest
+        local checked,coalesced=pcall(function()
+            return self.buildJob and self.buildJob.status=="running" and matches(self.buildContext) and self.frame:IsShown()
+        end)
+        if entryVersion~=buildVersion or entryRender~=renderVersion or entryHover~=hoverVersion or entryScroll~=scrollRequest then return end
+        if checked and coalesced then
+            validateContinuity(); return
+        end
+        if not checked then lastPaint=nil end
+        local previous=continuity
+        local owner={version=buildVersion,render=renderVersion,hover=hoverVersion,scroll=scrollRequest}
+        local version=ownedCall("StopBuild",owner,keepPaint)
+        if buildVersion~=version or not preparationCurrent(owner) then return end
         self.publishing=false
         local ctx,job,batch
-        local function owns() return buildVersion==version end
-        local function sameContext() return ctx and matches(ctx) and self.frame:IsShown() and owns() end
-        local function paint(why)
+        local preparing=true
+        local function owns()
+            return buildVersion==version and (not preparing or preparationCurrent(owner))
+        end
+        local function sameContext()
+            if not owns() then return false end
+            local ok,valid=pcall(function() return ctx and matches(ctx) and self.frame:IsShown() end)
+            return ok and valid and owns()
+        end
+        local function paint(why,permit)
             if not owns() then return end
-            self:Retain(why); if not owns() then return end
+            ownedCall("Retain",preparing and owner or nil,permit,why); if not owns() then return end
             self.rows=self.rows or {}
             pcall(self.empty.SetText,self.empty,why); if not owns() then return end
             pcall(self.reason.SetText,self.reason,clean(self:DisplayStatus())); if not owns() then return end
-            self:Render()
+            ownedCall("Render",preparing and owner or nil)
         end
         local function fail(why)
             if not owns() then return end
-            local retired=self:StopBuild()
+            local retired=ownedCall("StopBuild",preparing and owner or nil)
             if buildVersion~=retired or self.buildJob~=nil then return end
             version=retired
             paint(why)
         end
-        paint(self.frame:IsShown() and "Building saved dashboard incrementally; updating; Refresh to retry if interrupted" or
-            "refresh deferred while hidden; reopen or Refresh to retry")
-        if not owns() or not self.frame:IsShown() then return end
+        local prepared,q=pcall(function()
+            ctx=context()
+            if owns() and sameContext() then return prepareContinuity(ctx,version,owner,previous,requiredSignal) end
+        end)
+        if not owns() then
+            if q and continuity==q then continuity=nil end
+            return
+        end
+        if not prepared then q=nil end
+        local shownOK,shown=pcall(self.frame.IsShown,self.frame)
+        if not owns() then return end
+        if not shownOK then fail("Dashboard visibility unavailable; showing last observed values. Refresh to retry."); return end
+        paint(shown and "Building saved dashboard incrementally; updating; Refresh to retry if interrupted" or
+            "refresh deferred while hidden; reopen or Refresh to retry",q)
+        if not owns() then return end
+        shownOK,shown=pcall(self.frame.IsShown,self.frame)
+        if not owns() then return end
+        if not shownOK then fail("Dashboard visibility unavailable; showing last observed values. Refresh to retry."); return end
+        if not shown then ownedCall("Retain",owner,nil,"refresh deferred while hidden; reopen or Refresh to retry"); return end
         if not validSource(self.collector.db) then fail("Dashboard source unavailable/invalid; Refresh to retry."); return end
         local setup=pcall(function()
-            ctx=context(); if not owns() or not sameContext() then return end
+            if not ctx then ctx=context() end
+            if not owns() or not sameContext() then return end
             job=V.NewBuildJob(ctx.db,ctx.fresh,ctx.options,self.collector:Now())
             if not owns() or not sameContext() then return end
             assert(type(job)=="table" and type(job.Step)=="function" and type(job.Cancel)=="function","Invalid build job")
@@ -1142,18 +1564,24 @@ function Dashboard.New(env, collector)
             return
         end
         if not sameContext() then if job then pcall(job.Cancel,job) end; fail("Dashboard build superseded; refresh to retry."); return end
-        self.buildJob=job; self.buildBatch=batch; self.buildContext=ctx
+        -- Do not expose the job before scheduler/native setup returns under the
+        -- exact preparation owner. A same-build callback can win here too.
+        local function setupCurrent()
+            return owns() and self.buildJob==nil and sameContext() and owns() and self.buildJob==nil
+        end
         local function current() return owns() and self.buildJob==job and sameContext() and owns() and self.buildJob==job end
         local ok=pcall(function()
             assert(job.status=="running","Build setup rejected")
             if not self.buildDriver then
                 local created=env.CreateFrame("Frame")
-                if not current() then return end
+                if not setupCurrent() then return end
                 self.buildDriver=created
             end
             local driver=self.buildDriver
             assert(driver and type(driver.SetScript)=="function" and type(driver.Show)=="function" and type(driver.Hide)=="function","Scheduler unavailable")
             driver:SetScript("OnUpdate",function()
+                if not owns() or self.buildJob~=job then return end
+                validateContinuity()
                 if not owns() or self.buildJob~=job then return end
                 local worked=pcall(function()
                     if not current() then fail("Dashboard build superseded; refresh to retry."); return end
@@ -1202,12 +1630,26 @@ function Dashboard.New(env, collector)
                     elseif job.status~="running" then fail(job.reason or "Dashboard build failed; saved data retained.") end
                 end)
                 if not worked then fail("Dashboard scheduler/build failed; saved data retained. Refresh to retry.") end
+                if owns() then validateContinuity() end
             end)
-            if not current() then return end
+            if not setupCurrent() then return end
             driver:Show()
-            if owns() and self.buildJob==job and not sameContext() then fail("Dashboard build superseded; refresh to retry.") end
+            if owns() and not sameContext() then fail("Dashboard build superseded; refresh to retry.") end
         end)
-        if not ok then fail("Dashboard scheduler unavailable; saved data retained. No synchronous fallback.") end
+        if not ok then
+            if job then pcall(job.Cancel,job) end
+            fail("Dashboard scheduler unavailable; saved data retained. No synchronous fallback.")
+            return
+        end
+        if setupCurrent() then
+            -- All synchronous native/setup callbacks returned under the exact
+            -- expected owner. Only now hand the job to its asynchronous guard.
+            self.buildJob=job; self.buildBatch=batch; self.buildContext=ctx
+            if continuity==q and q then q.job=job; q.preparing=nil end
+            preparing=false
+        elseif job and self.buildJob~=job then
+            pcall(job.Cancel,job)
+        end
     end
     function self:Toggle()
         if combat() then self.wantOpen=true; self.collector.reason="Dashboard deferred until out of combat."; return end

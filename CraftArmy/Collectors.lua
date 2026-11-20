@@ -168,6 +168,12 @@ local function knIDs(raw,limit)
         local valid=knInt(v,1); return valid and v or nil,valid,valid and v or nil
     end)
 end
+-- P02: P01's strict skill/slot safeguards are independent of Moxie activation.
+-- Call only after the exact identity/capability registry has validated the tuple.
+local function expansionSafeguards(identity)
+    local id=identity.skillLineID
+    return id==2912 or id==2916 or id==2917 or id==2908 or id==2911
+end
 local function knCosts(raw)
     return knArray(raw,16,function(v)
         if not knPlain(v) or not knInt(v.ID,1) or not knInt(v.amount) then return nil,false end
@@ -244,6 +250,21 @@ function Collectors.New(env, db, changed)
     local self={env=env, db=db, revision=0, serial=0, fresh={}, pending={},
         reason="Log into each alt and open its profession.", changed=changed or function() end}
     local knowledgeSource
+    -- R03: runtime-only transition evidence, not freshness or saved observations.
+    local dashboardHandoff,dashboardScheduled
+    local function publishHandoff(kind,token)
+        if token then
+            local session=self.fresh[token.guid..":"..token.id]
+            if token.serial~=self.serial or token.revision~=self.revision or
+                not session or session.generation~=token.generation then
+                dashboardHandoff=nil; return
+            end
+        end
+        dashboardHandoff={kind=kind,db=self.db,fresh=self.fresh,serial=self.serial,
+            revision=self.revision,storeRevision=S.Revision(self.db),
+            guid=token and token.guid,id=token and token.id,generation=token and token.generation}
+    end
+    function self:DashboardHandoff() return dashboardHandoff end
     local function call(path, ...) return Collectors.Call(env,path,...) end
     function self:Now()
         local at=call("GetServerTime")
@@ -251,6 +272,7 @@ function Collectors.New(env, db, changed)
         return nil
     end
     function self:Invalidate(reason)
+        dashboardHandoff=nil
         knowledgeSource=nil
         self.revision=self.revision+1; self.fresh={}; self.pending={}
         self.reason=reason or "Snapshot invalidated; open your profession and refresh."
@@ -275,13 +297,14 @@ function Collectors.New(env, db, changed)
         if type(fn)~="function" or type(env.GetProfessionInfo)~="function" then
             self.roster={complete=false, reason="Primary roster APIs unavailable"}; return
         end
-        local ok, a,b=pcall(fn)
+        local ok, a,b,_,fishing,cooking=pcall(fn)
         local roster={complete=false, entries={}, reason="Presence only; automatic unlearning unverified"}
         if ok then
-            for _,index in pairs({a,b}) do
+            for position,index in pairs({[1]=a,[2]=b,[4]=fishing,[5]=cooking}) do
                 local good,name,_,_,_,_,_,parent=pcall(env.GetProfessionInfo,index)
-                if good and C.Integer(parent,1) and type(name)=="string" then
-                    roster.entries[parent]={name=name, parentID=parent}
+                if good and C.Integer(parent,1) and type(name)=="string" and
+                    (position<=2 or position==4 and parent==356 or position==5 and parent==185) then
+                    roster.entries[parent]={name=name, parentID=parent,primary=position<=2}
                 end
             end
         end
@@ -302,24 +325,35 @@ function Collectors.New(env, db, changed)
         local info=call("C_TradeSkillUI.GetChildProfessionInfo")
         local identity,why=D.Identity(info)
         if not identity then return nil,why end
+        local capabilities=D.Capabilities(identity)
+        if not capabilities then return nil,"Unverified profession capability tuple" end
         local base=call("C_TradeSkillUI.GetBaseProfessionInfo")
-        if type(base)~="table" or base.professionID~=identity.parentID or info.isPrimaryProfession~=true then
-            return nil,"Base/child identity not coherent primary profession"
+        if type(base)~="table" or base.professionID~=identity.parentID or info.isPrimaryProfession~=capabilities.primary then
+            return nil,capabilities.primary and "Base/child identity not coherent primary profession" or
+                "Base/child identity not coherent secondary profession"
         end
         self:Roster()
-        if not (self.roster and self.roster.entries and self.roster.entries[identity.parentID]) then
-            return nil,"Own learned-primary profession presence not established"
+        local learned=self.roster and self.roster.entries and self.roster.entries[identity.parentID]
+        if not learned or learned.primary~=capabilities.primary then
+            return nil,capabilities.primary and "Own learned-primary profession presence not established" or
+                "Own learned-secondary profession presence not established"
         end
-        local config=call("C_ProfSpecs.GetConfigIDForSkillLine",identity.skillLineID)
-        local staged
-        if C.Integer(config,1) then staged=call("C_Traits.ConfigHasStagedChanges",config) end
+        if expansionSafeguards(identity) and (not C.Integer(info.skillLevel) or
+            not C.Integer(info.maxSkillLevel,1) or info.skillLevel>info.maxSkillLevel) then
+            return nil,"Usable observed Midnight skill/cap unavailable"
+        end
+        local config,staged
+        if capabilities.knowledgeMode~="not_applicable" then
+            config=call("C_ProfSpecs.GetConfigIDForSkillLine",identity.skillLineID)
+            if C.Integer(config,1) then staged=call("C_Traits.ConfigHasStagedChanges",config) end
+        end
         return {character=character, identity=identity, info=info, config=config,
-            staged=staged, revision=self.revision, sourceCounter=info.sourceCounter}
+            capabilities=capabilities,staged=staged, revision=self.revision, sourceCounter=info.sourceCounter}
     end
     function self:Same(a,b)
         return b and a.revision==b.revision and a.character.guid==b.character.guid and
             a.identity.skillLineID==b.identity.skillLineID and a.identity.parentID==b.identity.parentID and
-            a.identity.profession==b.identity.profession and a.config==b.config and
+            a.identity.profession==b.identity.profession and a.identity.expansionID==b.identity.expansionID and a.config==b.config and
             a.sourceCounter==b.sourceCounter
     end
     function self:Gear(slot, role)
@@ -476,6 +510,7 @@ function Collectors.New(env, db, changed)
         return raw
     end
     function self:Scan()
+        dashboardHandoff=nil
         knowledgeSource=nil
         if self.storagePending then
             self.reason=self.blockReason or "Saved storage initialization pending; scans disabled."
@@ -504,6 +539,11 @@ function Collectors.New(env, db, changed)
         local function obs(key,value,source,status,reason)
             observations[key]=C.Observation(status or (value~=nil and "observed" or "unknown"),value,at,source,reason)
         end
+        local cap=ctx.capabilities
+        local function na(key)
+            obs(key,nil,"P01 exact profession capability registry; user evidence 2026-11-18/19",
+                "not_applicable","Not applicable; confirmed profession capability")
+        end
         local skill=pick(ctx.info,"skillLevel maxSkillLevel skillModifier")
         if skill and C.Integer(skill.skillLevel) and C.Integer(skill.maxSkillLevel) and C.Finite(skill.skillModifier) then
             obs("skill",skill,"C_TradeSkillUI.GetChildProfessionInfo")
@@ -515,18 +555,26 @@ function Collectors.New(env, db, changed)
             if v and C.Integer(v.quantity) then v.id=id; obs(key,v,"C_CurrencyInfo.GetCurrencyInfo")
             else obs(key,nil,"C_CurrencyInfo.GetCurrencyInfo",status=="observed" and "unknown" or status,reason) end
         end
-        currency("concentration",call("C_TradeSkillUI.GetConcentrationCurrencyID",ctx.identity.skillLineID))
-        currency("moxie",D.moxie[ctx.identity.skillLineID] and D.moxie[ctx.identity.skillLineID].id)
-        local slots,slotComplete=list(call("C_TradeSkillUI.GetProfessionSlots",ctx.identity.profession),16)
+        if cap.concentration then currency("concentration",call("C_TradeSkillUI.GetConcentrationCurrencyID",ctx.identity.skillLineID))
+        else na("concentration") end
+        if cap.moxieMode=="enabled" then
+            currency("moxie",D.moxie[ctx.identity.skillLineID] and D.moxie[ctx.identity.skillLineID].id)
+        elseif cap.moxieMode=="not_applicable" then na("moxie")
+        else obs("moxie",nil,"P01 capability registry","unsupported","Moxie applicability/mapping pending native evidence; not confirmed N/A") end
+        local slotList=call("C_TradeSkillUI.GetProfessionSlots",ctx.identity.profession)
+        local slots,slotComplete
+        if expansionSafeguards(ctx.identity) then slots,slotComplete=knIDs(slotList,16)
+        else slots,slotComplete=list(slotList,16) end
         local roles={}
         for _,slot in ipairs(slots or {}) do
-            local role=D.slotRoles[slot]
+            local role=cap.slotRoles[slot]
             if role and roles[role] then slotComplete=false end
             roles[role or ("slot"..slot)]=slot
         end
         obs("slots",{indices=slots or {},complete=slotComplete},"C_TradeSkillUI.GetProfessionSlots")
         for _,role in ipairs({"accessory1","accessory2","tool"}) do
-            if not slotComplete or not roles[role] then
+            if not cap.roles[role] then na(role)
+            elseif not slotComplete or not roles[role] then
                 obs(role,nil,"equipment role registry","unknown","No unique verified role/location")
             else
                 local v,status,reason,location=self:Gear(roles[role],role)
@@ -536,13 +584,16 @@ function Collectors.New(env, db, changed)
         end
         -- Unknown roles remain independent raw evidence, never relabeled by position.
         for role,slot in pairs(roles) do
-            if role:match("^slot") then
+            if not expansionSafeguards(ctx.identity) and role:match("^slot") then
                 local v,status,reason=self:Gear(slot,nil); obs(role,v,"unmapped equipped slot",status,reason)
             end
         end
-        local kp,status,reason=call("C_ProfSpecs.GetCurrencyInfoForSkillLine",ctx.identity.skillLineID)
-        if type(kp)=="table" and C.Integer(kp.numAvailable) then obs("unspent",kp.numAvailable,"C_ProfSpecs.GetCurrencyInfoForSkillLine")
-        else obs("unspent",nil,"C_ProfSpecs.GetCurrencyInfoForSkillLine",status=="observed" and "unknown" or status,reason) end
+        if cap.knowledgeMode=="enabled" then
+            local kp,status,reason=call("C_ProfSpecs.GetCurrencyInfoForSkillLine",ctx.identity.skillLineID)
+            if type(kp)=="table" and C.Integer(kp.numAvailable) then obs("unspent",kp.numAvailable,"C_ProfSpecs.GetCurrencyInfoForSkillLine")
+            else obs("unspent",nil,"C_ProfSpecs.GetCurrencyInfoForSkillLine",status=="observed" and "unknown" or status,reason) end
+        elseif cap.knowledgeMode=="not_applicable" then na("unspent")
+        else obs("unspent",nil,"P01 capability registry","unsupported","Gathering Knowledge accounting pending native evidence") end
         local version="unknown"
         if type(env.GetBuildInfo)=="function" then
             local ok,v,b=pcall(env.GetBuildInfo)
@@ -550,7 +601,7 @@ function Collectors.New(env, db, changed)
         end
         local locale=call("GetLocale")
         obs("environment",{version=version,locale=locale},"GetBuildInfo / GetLocale")
-        local raw=self:Knowledge(ctx)
+        local raw=cap.knowledgeMode=="enabled" and self:Knowledge(ctx) or {}
         local finish=self:Context()
         if not self:Same(ctx,finish) or self.serial~=scanSerial or
             finish.identity.expansionID~=ctx.identity.expansionID then
@@ -558,7 +609,7 @@ function Collectors.New(env, db, changed)
         end
         if type(finish.staged)=="boolean" then raw.stagedEnd=finish.staged end
         raw.stable=ctx.revision==self.revision and self.serial==scanSerial
-        local result=K.Evaluate(raw)
+        local result=cap.knowledgeMode=="enabled" and K.Evaluate(raw) or {complete=false,trees={}}
         -- Evidence is duplicated in coherent tree units. Do not raise the global
         -- copier budget for a maximally sized scan: fail all trees together and
         -- retain only failed attempts when that combined evidence cannot fit.
@@ -567,7 +618,8 @@ function Collectors.New(env, db, changed)
             result.complete=false; result.reason="Knowledge evidence exceeds bounded snapshot payload"
             for _,tree in ipairs(result.trees) do tree.complete=false; tree.reason=result.reason end
         end
-        if C.NativeKnowledgeCurrency(ctx.identity) then
+        if cap.knowledgeMode=="not_applicable" then na("knowledgeRaw")
+        elseif C.NativeKnowledgeCurrency(ctx.identity) then
             local rawValid=evidenceFits and C.ValidPayload("knowledgeRaw",raw,"observed")
             obs("knowledgeRaw",rawValid and raw or nil,"C_ProfSpecs / C_Traits",
                 rawValid and "observed" or "unknown",not rawValid and
@@ -590,7 +642,10 @@ function Collectors.New(env, db, changed)
             prior=profession and profession.active
         end
         local priorIndex=prior and prior.fields.knowledgeIndex and prior.fields.knowledgeIndex.last
-        if not result.complete and priorIndex then
+        if cap.knowledgeMode=="not_applicable" then na("knowledgeIndex")
+        elseif cap.knowledgeMode=="pending" then
+            obs("knowledgeIndex",nil,"P01 capability registry","unsupported","Gathering Knowledge accounting pending native evidence")
+        elseif not result.complete and priorIndex then
             obs("knowledgeIndex",nil,"Knowledge.Evaluate","unknown","Native evaluation failed; retained coherent tree index")
         elseif raw.tabsComplete==true and #index>0 then
             obs("knowledgeIndex",index,"C_ProfSpecs.GetSpecTabIDsForSkillLine")
@@ -604,7 +659,7 @@ function Collectors.New(env, db, changed)
                 end
             end
         end
-        if ctx.staged~=false or finish.staged~=false then
+        if cap.knowledgeMode=="enabled" and (ctx.staged~=false or finish.staged~=false) then
             obs("unspent",nil,"knowledge staging","unknown","Staged state not explicitly false at both boundaries")
         end
         if self.serial~=scanSerial or self.revision~=ctx.revision then
@@ -634,6 +689,9 @@ function Collectors.New(env, db, changed)
         self.reason=result.complete and
             "Snapshot refreshed; native rank points/shared-spent reconciled (not verified future costs)." or
             "Snapshot refreshed; knowledge totals unknown or stale (native reconciliation incomplete)."
+        if cap.knowledgeMode=="not_applicable" then self.reason="Snapshot refreshed; Knowledge not applicable for this profession."
+        elseif cap.knowledgeMode=="pending" then self.reason="Snapshot refreshed; gathering Moxie/Knowledge activation pending native evidence." end
+        publishHandoff("observed",token)
         self:StartLoads(loads,token)
         self.changed(); return true
     end
@@ -708,6 +766,7 @@ function Collectors.New(env, db, changed)
                         if o.status=="observed" then session.fields[key]=true end
                     end
                 end
+                publishHandoff("observed",p.token)
             elseif not applied then self.reason=why or "Item retry commit failed; snapshot not refreshed" end
         end
         self.changed()
@@ -730,6 +789,7 @@ function Collectors.New(env, db, changed)
                     if applied and S.IsHandle(self.db) then
                         knowledgeSource=nil; token.storage=S.Token(self.db,token.guid,token.id)
                     end
+                    if applied and applied.generation==token.generation then publishHandoff("observed",token) end
                 end
             end
         end
@@ -739,12 +799,20 @@ function Collectors.New(env, db, changed)
         self:Invalidate(reason)
         if self.storagePending then self.changed(); return end
         if call("InCombatLockdown")~=false then self.deferred=true; self.changed(); return end
-        if self.scheduled then return end
+        if self.scheduled then
+            if dashboardScheduled and env.C_Timer and type(env.C_Timer.After)=="function" then publishHandoff("requested") end
+            return
+        end
         if not env.C_Timer or type(env.C_Timer.After)~="function" then
             self.reason="Scheduling unavailable; use /ca scan"; self.changed(); return
         end
         self.scheduled=true
-        env.C_Timer.After(0,function() self.scheduled=false; self:Scan() end)
+        dashboardScheduled=true
+        publishHandoff("requested")
+        local ok,why=pcall(env.C_Timer.After,0,function()
+            dashboardScheduled=nil; self.scheduled=false; self:Scan()
+        end)
+        if not ok then dashboardHandoff=nil; dashboardScheduled=nil; error(why,0) end
     end
     return self
 end

@@ -280,8 +280,12 @@ local function quality(v)
     return true
 end
 local metadataSources={itemExpansion="C_Item.GetItemInfo",toolStat="C_Item.GetItemStats:unenchant-link-v1"}
-local toolCategories={Multicraft=true,Resourcefulness=true,Ingenuity=true,["Crafting Speed"]=true}
-local metadataSlots={[20]="tool",[21]="accessory1",[22]="accessory2",[23]="tool",[24]="accessory1",[25]="accessory2"}
+-- P02: Finesse/Perception intrinsic Tool keys evidenced on 70961.
+-- P03 Deftness raw key evidenced by user's Skinning Tool screenshot; no neutral-query proof.
+local toolCategories={Multicraft=true,Resourcefulness=true,Ingenuity=true,["Crafting Speed"]=true,Finesse=true,Perception=true,Deftness=true}
+-- P01 user-observed secondary slots 2026-11-18; Fishing accessories/Head excluded.
+local metadataSlots={[20]="tool",[21]="accessory1",[22]="accessory2",[23]="tool",[24]="accessory1",[25]="accessory2",
+    [26]="tool",[27]="accessory1",[28]="tool"}
 local function gearMetadata(v,key)
     if type(v)~="table" or getmetatable(v)~=nil or v.source~=metadataSources[key] or
         not Core.Integer(v.attemptedAt) or
@@ -338,6 +342,8 @@ local nativeCurrencies={
     [2906]={171,3,4030}, [2907]={164,1,3750}, [2909]={333,9,4056},
     [2910]={202,8,3903}, [2913]={773,13,3902}, [2914]={755,12,3989},
     [2915]={165,2,4085}, [2918]={197,7,3736},
+    -- P02: exact gathering spend tuples evidenced on 70961, not all-rank proof.
+    [2912]={182,4,3778}, [2916]={186,6,3784}, [2917]={393,11,3889},
 }
 function Core.NativeKnowledgeCurrency(v)
     if type(v)~="table" or getmetatable(v)~=nil then return nil end

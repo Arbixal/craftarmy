@@ -41,6 +41,7 @@ function V.Field(g,key,session)
 end
 function V.Gear(value,state)
     local out={text="?",tooltip={state.text},state=state}
+    if state.lastStatus=="not_applicable" then out.text="—"; out.notApplicable=true; return out end
     if state.lastStatus=="empty" then out.text=""; out.empty=true; out.exists=false; return out end
     if not value then return out end
     out.value=value; out.link=type(value.link)=="string" and value.link or nil
@@ -311,6 +312,7 @@ local function fullTime(seconds)
     return string.format("%.0fm",rest)
 end
 function V.ConcentrationTooltip(row,now)
+    if row.concentrationState.lastStatus=="not_applicable" then return {"Not applicable."} end
     local cached=row.cellTooltips[I.Concentration]
     local lines=withStatus({cached[1]},row.concentrationState,row.archived)
     local estimate,why
@@ -330,10 +332,45 @@ function V.Row(guid,c,id,g,session,now,archived)
         cells={},warnings={},trees={},known=0}
     row.key=guid..":"..id..":"..g.generation
     local details,states={},{}
+    local capabilities=D.Capabilities(g.identity)
+    local na={}
+    if capabilities then
+        if not capabilities.concentration then na.concentration=true end
+        if capabilities.moxieMode=="not_applicable" then na.moxie=true end
+        if capabilities.knowledgeMode=="not_applicable" then na.knowledgeIndex=true; na.knowledgeRaw=true; na.unspent=true end
+        for role,applicable in pairs(capabilities.roles) do if not applicable then na[role]=true end end
+    end
+    row.notApplicableColumns={}
+    for key,column in pairs({concentration=I.Concentration,moxie=I.Moxie,knowledgeIndex=I.Knowledge,unspent=I.Unspent,
+        accessory1=I.Accessory1,accessory2=I.Accessory2,tool=I.Tool}) do
+        if na[key] then row.notApplicableColumns[column]=true end
+    end
     local function field(key)
         local v,s=V.Field(g,key,session)
+        if na[key] then
+            details[#details+1]=s.text
+            if key=="concentration" and type(v)=="table" then
+                details[#details+1]="Underlying concentration history: "..str(v.quantity).."/"..str(v.maxQuantity)
+            elseif key=="moxie" and type(v)=="table" then
+                details[#details+1]="Underlying Moxie history: "..str(v.quantity).."; ID "..str(v.id)
+            elseif key=="unspent" and v~=nil then
+                details[#details+1]="Underlying unspent history: "..str(v)
+            elseif key=="knowledgeIndex" and type(v)=="table" then
+                local rawHistory=V.Field(g,"knowledgeRaw",session)
+                for _,tree in ipairs(v) do
+                    local old,oldState=V.Field(g,"tree:"..tree.id,session)
+                    details[#details+1]="Underlying Knowledge history: "..str(tree.name).." ("..str(tree.id)..")"
+                    for _,line in ipairs(treeDetail(old,rawHistory,oldState.observedAt,oldState)) do details[#details+1]=line end
+                end
+            end
+            local historical=s
+            s={known=false,fresh=false,stale=false,status="not_applicable",lastStatus="not_applicable",
+                text=historical.text.."; P01 exact capability registry: Not applicable (user evidence 2026-11-18/19)",
+                underlyingValue=v,underlyingState=historical}
+            v=nil
+        end
         states[key]=s
-        if s.known then row.known=row.known+1 end
+        if s.known and s.lastStatus~="not_applicable" then row.known=row.known+1 end
         details[#details+1]=s.text
         return v,s
     end
@@ -361,7 +398,9 @@ function V.Row(guid,c,id,g,session,now,archived)
     row.concentration=conc and conc.quantity; row.moxie=mox and mox.quantity
     row.cells[I.Concentration]=conc and C.Integer(conc.quantity,0) and
         (str(conc.quantity).."/"..(C.Integer(conc.maxQuantity,1) and str(conc.maxQuantity) or "?")) or "?"
+    if cs.lastStatus=="not_applicable" then row.cells[I.Concentration]="—" end
     row.cells[I.Moxie]=mox and str(mox.quantity) or "?"
+    if ms.lastStatus=="not_applicable" then row.cells[I.Moxie]="—" end
     local function warning(category,condition,state)
         if condition and not archived then
             row.warnings[#row.warnings+1]={category=category,fresh=state.fresh,
@@ -371,7 +410,7 @@ function V.Row(guid,c,id,g,session,now,archived)
     warning("Moxie",mox and number(mox.quantity) and mox.quantity>600,ms)
     warning("Concentration",conc and number(conc.quantity) and number(conc.maxQuantity) and
         conc.maxQuantity>0 and conc.quantity>=conc.maxQuantity*0.9,cs)
-    if tool.enchant then row.enchantMissing=tool.enchant.present==false end
+    if tool.enchant and (not capabilities or capabilities.enchantAttentionMode=="enabled") then row.enchantMissing=tool.enchant.present==false end
     warning("Missing enchant",row.enchantMissing,tool.state)
     local index=field("knowledgeIndex")
     local raw=field("knowledgeRaw")
@@ -402,6 +441,8 @@ function V.Row(guid,c,id,g,session,now,archived)
     warning("Progression",incomplete,{fresh=progressFresh})
     row.cells[I.Knowledge]=#row.trees==0 and "?" or "" -- Native inline bars render here.
     local unspent,us=field("unspent"); row.cells[I.Unspent]=str(unspent); row.unspent=unspent
+    if na.knowledgeIndex then row.cells[I.Knowledge]="—" end
+    if na.unspent then row.cells[I.Unspent]="—" end
     local hasFresh=false
     for _,s in ipairs({ss,cs,ms,us,tool.state}) do if s.fresh then hasFresh=true end end
     row.snapshot=(hasFresh and not archived and "read " or "snapshot ")..V.Age(now,g.scannedAt)
@@ -452,6 +493,10 @@ function V.Row(guid,c,id,g,session,now,archived)
     end
     for _,role in ipairs(V.roles) do
         local gear=row.gear[role]
+        if gear.state.underlyingValue then
+            local old=(role=="tool" and V.Tool or V.Gear)(gear.state.underlyingValue,gear.state.underlyingState)
+            for _,line in ipairs(old.tooltip) do gear.tooltip[#gear.tooltip+1]="Underlying history: "..line end
+        end
         local lines={({accessory1="Accessory #1",accessory2="Accessory #2",tool="Tool"})[role],freshness(gear.state,now,archived)}
         if gear.state.lastStatus=="not_applicable" then lines[#lines+1]="Not applicable."
         elseif gear.empty then lines[#lines+1]="Empty slot (confirmed)."
@@ -511,6 +556,7 @@ function V.Row(guid,c,id,g,session,now,archived)
         elseif type(gear.link)=="string" and #gear.link>0 then gear.summaryTooltip={}
         else gear.summaryTooltip={"Item link unavailable."}; gear.link=nil end
     end
+    for column in pairs(row.notApplicableColumns) do summaries[column]={"Not applicable."} end
     for _,lines in pairs(summaries) do bounded(lines) end
     -- Presentation-only typed keys. Never compare warning markup/age strings or
     -- borrow raw Knowledge/skill progression as evidence of displayed tree totals.

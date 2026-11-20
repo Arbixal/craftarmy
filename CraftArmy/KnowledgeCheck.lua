@@ -209,7 +209,8 @@ local function validContext(ctx,mode)
         if not ctx or not integer(ctx.config,1) or not integer(ctx.sourceCounter) or not plain(ctx.identity) then return false end
         local i=ctx.identity
         local map=NS.Data.expansions[i.skillLineID]
-        return map~=nil and NS.Data.families[i.profession]~=nil and i.parentID==map.parentID and
+        local cap=NS.Data.Capabilities(i)
+        return map~=nil and cap~=nil and cap.knowledgeMode~="not_applicable" and i.parentID==map.parentID and
             i.profession==map.profession and i.expansionID==11 and map.expansionID==11
     end
     return ctx and integer(ctx.config,1) and integer(ctx.sourceCounter) and ctx.identity.skillLineID==2913 and
@@ -221,6 +222,97 @@ local function blank()
         runtimeStart={status="unavailable"},runtimeEnd={status="not attempted"},
         discovered=0,captured=0,reconciliation={status="unknown",reason="capture incomplete"},allRankCosts="unverified"}
 end
+-- P01 diagnostic-only profile: bounded plain projections, never production mappings.
+local function statRows(env,query)
+    local raw,status=read(env,"C_Item.GetItemStats",query)
+    local out={status=status,complete=false,items={}}
+    if status~="observed" then return out end
+    if not plain(raw) then out.status="invalid"; return out end
+    local key,count=nil,0
+    while true do
+        local v; key,v=next(raw,key); if key==nil then break end
+        count=count+1
+        if count>32 then out.status="truncated"; return out end
+        if type(key)~="string" or #key>128 or not key:match("^ITEM_MOD_[A-Z0-9_]+$") or not C.Finite(v) then
+            out.status="invalid"; out.items={}; return out
+        end
+        out.items[#out.items+1]={key=key,value=v,label=clean(rawget(env,key),128)}
+    end
+    table.sort(out.items,function(a,b) return a.key<b.key end)
+    out.complete=true; out.status=#out.items==0 and "empty" or "observed"
+    return out
+end
+local function gathering(env,ctx,candidate,unit)
+    local g={complete=false,provenance="P02 read-only evidence; capture does not change activation or snapshots"}
+    local raw,status=read(env,"C_TradeSkillUI.GetChildProfessionInfo")
+    local coherent=plain(raw) and raw.professionID==ctx.identity.skillLineID and
+        raw.parentProfessionID==ctx.identity.parentID and raw.profession==ctx.identity.profession and raw.isPrimaryProfession==true
+    g.skill={status=status~="observed" and status or coherent and "observed" or "invalid"}
+    if coherent then
+        g.skill.skillLevel=number(raw.skillLevel); g.skill.maxSkillLevel=number(raw.maxSkillLevel,1)
+        g.skill.skillModifier=observation(raw.skillModifier,"observed",C.Finite)
+    end
+    local kp,ks=read(env,"C_ProfSpecs.GetCurrencyInfoForSkillLine",ctx.identity.skillLineID)
+    g.unspent=observation(plain(kp) and kp.numAvailable or nil,ks,function(v) return integer(v) end)
+    local currency,cs=read(env,"C_CurrencyInfo.GetCurrencyInfo",candidate.id)
+    g.moxie={id=candidate.id,provenance=candidate.provenance,status=cs,
+        name=plain(currency) and clean(currency.name),
+        quantity=observation(plain(currency) and currency.quantity or nil,cs,function(v) return integer(v) end),
+        maxQuantity=observation(plain(currency) and currency.maxQuantity or nil,cs,function(v) return integer(v) end)}
+    if cs=="observed" and not plain(currency) then g.moxie.status="invalid" end
+    local slots,ss=read(env,"C_TradeSkillUI.GetProfessionSlots",ctx.identity.profession)
+    g.slots=ids(slots,ss,16)
+    local cap=NS.Data.Capabilities(ctx.identity)
+    local slot,count=nil,0
+    for _,row in ipairs(g.slots.items) do
+        if cap.slotRoles[row.value]=="tool" then slot=row.value; count=count+1 end
+    end
+    g.tool={status="unknown",total={status="blocked",complete=false,items={}},neutral={status="blocked",complete=false,items={}}}
+    unit("metadata","gathering skill/candidate/slots")
+    local tool=g.tool
+    local location
+    if g.slots.complete and count==1 then
+        tool.slot=slot
+        local factory=Collectors.Resolve(env,"ItemLocation.CreateFromEquipmentSlot")
+        if type(factory)=="function" then
+            local ok,v=pcall(factory,env.ItemLocation,slot); if ok then location=v end
+        end
+    end
+    if location then
+        local exists,es=read(env,"C_Item.DoesItemExist",location)
+        tool.exists=observation(exists,es,function(v) return type(v)=="boolean" end)
+        if exists==true then
+        tool.itemID=scalar(env,"C_Item.GetItemID",1,location)
+        local cached,cacheStatus=read(env,"C_Item.IsItemDataCached",location)
+        tool.cached=observation(cached,cacheStatus,function(v) return type(v)=="boolean" end)
+        local link,ls=read(env,"C_Item.GetItemLink",location)
+        local neutral=ls=="observed" and Collectors.ToolStatLink(link)
+        local linkID=neutral and tonumber(neutral:match("^item:(%d+):"))
+        if exists==true and cached==true and good(tool.itemID) and linkID==tool.itemID.value then
+            tool.total=statRows(env,link); unit("metadata","gathering total stat query")
+            tool.neutral=statRows(env,neutral); unit("metadata","gathering enchant-neutral stat query")
+            local currentLink=read(env,"C_Item.GetItemLink",location)
+            local currentID=read(env,"C_Item.GetItemID",location)
+            local currentExists=read(env,"C_Item.DoesItemExist",location)
+            local currentCached=read(env,"C_Item.IsItemDataCached",location)
+            if currentLink==link and currentID==tool.itemID.value and currentExists==true and currentCached==true then
+                tool.status=tool.total.complete and tool.neutral.complete and "observed" or "incomplete"
+            else
+                tool.status="unknown"; tool.reason="Equipped instance changed/unloaded; queries discarded"
+                tool.total={status="unknown",complete=false,items={}}; tool.neutral={status="unknown",complete=false,items={}}
+                tool.itemID={status="unknown"}; tool.cached={status="unknown"}; tool.exists={status="unknown"}
+            end
+        else tool.reason="Equipped instance unavailable/unloaded or invalid link" end
+        else tool.reason="Equipped tool absent or existence unavailable" end
+    else tool.reason="No unique verified returned primary tool slot" end
+    local skill=g.skill
+    g.complete=skill.status=="observed" and good(skill.skillLevel) and good(skill.maxSkillLevel) and
+        good(skill.skillModifier) and skill.skillLevel.value<=skill.maxSkillLevel.value and good(g.unspent) and
+        g.moxie.status=="observed" and g.moxie.name~=nil and good(g.moxie.quantity) and
+        (good(g.moxie.maxQuantity) or g.moxie.maxQuantity.status=="nil") and g.slots.complete and tool.status=="observed" or false
+    unit("metadata","gathering instance recheck")
+    return g
+end
 -- unit returns to the outer Step, never through any of the per-API pcalls.
 local function capture(env,runtime,r,unit,mode)
     if not plain(runtime) or not integer(runtime.revision) or not integer(runtime.serial) then r.reason="Existing runtime collector token unavailable"; unit("metadata","runtime unavailable"); return end
@@ -230,7 +322,7 @@ local function capture(env,runtime,r,unit,mode)
     r.start=boundary(env,start)
     if not validContext(start,mode) then
         r.runtimeEnd={status="observed",revision=integer(runtime.revision) and runtime.revision or nil,serial=integer(runtime.serial) and runtime.serial or nil}
-        r.reason=mode==PROFESSION_MODE and "Own ready Midnight crafting context/config/sourceCounter unavailable" or "Own ready Midnight Inscription context/config/sourceCounter unavailable"; unit("metadata","context unavailable"); return
+        r.reason=mode==PROFESSION_MODE and "Own ready Midnight specialization context/config/sourceCounter unavailable" or "Own ready Midnight Inscription context/config/sourceCounter unavailable"; unit("metadata","context unavailable"); return
     end
     r.timeStart=scalar(env,"GetServerTime",0)
     local locale,ls=read(env,"GetLocale"); r.locale={status=ls,value=clean(locale,32)}
@@ -245,6 +337,8 @@ local function capture(env,runtime,r,unit,mode)
         else r.build.status="error" end
     end
     local complete=true
+    local moxieCandidate=mode==PROFESSION_MODE and NS.Data.GatheringMoxieCandidate(start.identity)
+    if moxieCandidate then r.gatheringEvidence=gathering(env,start,moxieCandidate,unit) end
     if not good(r.timeStart) or r.locale.status~="observed" or r.build.status~="observed" or not good(r.build.interface) then complete=false end
     local tabIDs,ts=read(env,"C_ProfSpecs.GetSpecTabIDsForSkillLine",start.identity.skillLineID)
     r.tabIDs=ids(tabIDs,ts,8)
@@ -313,6 +407,9 @@ local function capture(env,runtime,r,unit,mode)
         r.runtimeStart.revision==r.runtimeEnd.revision and r.runtimeStart.serial==r.runtimeEnd.serial and
         start.staged==false and finish.staged==false and value(r.start.stagingRead)==false and value(r.finish.stagingRead)==false or false
     r.captureComplete=complete and r.stable and good(r.timeEnd)
+    if r.gatheringEvidence and not r.stable then
+        r.gatheringEvidence.complete=false; r.gatheringEvidence.reason="Unstable/staged context or runtime boundary"
+    end
     r.reason=r.captureComplete and "bounded data captured; cost semantics still unverified" or "incomplete data or unstable/staged boundaries"
     unit("boundary","finish boundary")
     -- Stage candidates only after *all* ownership/coverage/boundary checks finish.
@@ -392,6 +489,19 @@ local function format(r,unit)
     add("CraftArmy knowledgecheck version1 BEGIN"); add(WARNING); add(BOUNDS)
     add("Sources: protected GetBuildInfo (version/build/interface), GetLocale, GetServerTime; C_ProfSpecs tab/root/children/unlock/spend/currency; C_Traits node/entry/current costs/committed tree currencies. Context/Same use a new ephemeral collector only.")
     for _,key in ipairs({"sourcePin","build","locale","timeStart","timeEnd","start","finish","runtimeStart","runtimeEnd","tabIDs"}) do add(key,r[key]) end
+    if r.gatheringEvidence then
+        local g=r.gatheringEvidence
+        add("gatheringEvidence read-only",{complete=g.complete,reason=g.reason,provenance=g.provenance})
+        add("gathering skill",g.skill); add("gathering unspent observation",g.unspent)
+        add("gathering Moxie observation",g.moxie); add("gathering returned slots",g.slots)
+        local tool=g.tool
+        add("gathering equipped tool",{status=tool.status,reason=tool.reason,slot=tool.slot,exists=tool.exists,itemID=tool.itemID,cached=tool.cached})
+        for _,key in ipairs({"total","neutral"}) do
+            local stats=tool[key]
+            add("gathering tool "..key,{status=stats.status,complete=stats.complete})
+            for _,row in ipairs(stats.items) do add("gathering "..key.." stat",row) end
+        end
+    end
     for _,t in ipairs(r.tabs or {}) do
         add("TAB",{id=t.id,name=t.name,infoStatus=t.infoStatus,root=t.root,discovered=t.discovered,captured=t.captured,coverageComplete=t.coverageComplete,flags=t.flags})
         local rows=t.currencies or {status="unavailable",complete=false,items={}}
@@ -413,6 +523,7 @@ local function format(r,unit)
     local effective={captureComplete=r.captureComplete==true and not clipped,outputTruncated=clipped,
         stable=r.stable==true,discovered=r.discovered,captured=r.captured,reason=r.reason,
         allRankCosts="UNVERIFIED",reconciliation=clipped and {status="unknown",reason="output clipped; no passing totals"} or r.reconciliation}
+    if r.gatheringEvidence then effective.gatheringEvidenceComplete=r.gatheringEvidence.complete==true and not clipped end
     if effective.captureComplete then
         effective.candidate=r.candidate; effective.shared=r.shared
         effective.trees={}
@@ -458,7 +569,9 @@ function Job:Step()
     self.steps=self.steps+1; self.pathUnits=0; self.lineAttempts=0
     -- Native resume, not pcall around a yielding worker. API pcalls finish before
     -- unit yields; unexpected private graph/format errors never escape or leak.
-    local ok,a,b,label,paths,attempts=coroutine.resume(self.worker)
+    local worker=self.worker
+    local ok,a,b,label,paths,attempts=coroutine.resume(worker)
+    if self.status~="running" or self.worker~=worker then return self end
     if not ok then stop(self,"job failure (payload omitted)"); return self end
     if coroutine.status(self.worker)=="dead" then
         self.worker=nil; self.status="complete"; self.completed=true

@@ -135,7 +135,8 @@ function Commands.New(env,runnerFactory)
         if type(ctx)~="table" or type(ctx.identity)~="table" or type(ctx.character)~="table" then return false end
         local i=ctx.identity
         local m=NS.Data.expansions[i.skillLineID]
-        return m and NS.Data.families[i.profession] and i.parentID==m.parentID and
+        local cap=NS.Data.Capabilities(i)
+        return m and cap and cap.knowledgeMode~="not_applicable" and i.parentID==m.parentID and
             i.profession==m.profession and i.expansionID==11 and m.expansionID==11 and
             NS.Core.Integer(ctx.config,1) and ctx.config<=2147483647 and
             NS.Core.Integer(ctx.sourceCounter,0) and ctx.sourceCounter<=2147483647 and ctx.staged==false and
@@ -290,7 +291,7 @@ function Commands.New(env,runnerFactory)
             else
                 pcall(s.dispose); s.dispose=nil; s.runtime=nil; s.guard=nil; s.context=nil; s.clock=nil
                 self.knowledgeCaptureSummary={status="incomplete",completed=false,reason="start requirements unavailable (payload omitted)",callbacks=0,captureComplete=false}
-                pcall(printLine,"Knowledgecapture not started: idle existing collector, own ready unstaged crafting profession, safe combat/clock/Frame required; wait/retry manually.")
+                pcall(printLine,"Knowledgecapture not started: idle existing collector, own ready unstaged specialization profession, safe combat/clock/Frame required; wait/retry manually.")
             end
         end
         armed=setup and self.knowledgeCapture==s
@@ -509,7 +510,7 @@ function Commands.New(env,runnerFactory)
         if command=="" then self.dashboard:Toggle()
         elseif command=="scan" then
             local _,why=self.collector:Scan(); printLine(why or self.collector.reason)
-        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (frame-stepped isolated fixtures, out of combat); /ca selftest cancel; /ca knowledgecheck (read-only provisional Inscription evidence, out of combat); /ca knowledgecapture [status|cancel] (frame-stepped read-only crafting evidence).") end
+        else printLine("/ca toggles dashboard; /ca help; /ca scan (open own Midnight profession); /ca selftest (frame-stepped isolated fixtures, out of combat); /ca selftest cancel; /ca knowledgecheck (read-only provisional Inscription evidence, out of combat); /ca knowledgecapture [status|cancel] (frame-stepped read-only specialization profession evidence).") end
     end
     function self:Event(event,...)
         if self.knowledgeCapture then stopCapture(self.knowledgeCapture,"event received; retry manually after normal processing settles") end

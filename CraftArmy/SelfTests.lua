@@ -625,7 +625,17 @@ case("field zero false nil error; attempt time distinct; GUID isolation",functio
         end
         ready.toolStat=unit("toolStat","Multicraft"); ready.itemExpansion=unit("itemExpansion",10)
         eq(C.ValidPayload("tool",ready,"observed"),true)
+        -- P02 ADAPT U10_CATEGORY BEGIN
+--[=============[P02 ORIGINAL BEGIN
         for _,change in ipairs({function(g) g.toolStat.value="Perception" end,function(g) g.itemExpansion.value=-1 end,
+P02 ORIGINAL END]=============]
+        -- P03 ADAPT U10_CATEGORY BEGIN
+--[==============[P03 ORIGINAL BEGIN
+        for _,change in ipairs({function(g) g.toolStat.value="Deftness" end,function(g) g.itemExpansion.value=-1 end,
+P03 ORIGINAL END]==============]
+        for _,change in ipairs({function(g) g.toolStat.value="P03Unsupported" end,function(g) g.itemExpansion.value=-1 end,
+        -- P03 ADAPT U10_CATEGORY END
+        -- P02 ADAPT U10_CATEGORY END
             function(g) g.itemExpansion.value=2147483648 end,function(g) g.toolStat.source="wrong" end,
             function(g) g.toolStat.observedAt=nil end,function(g) g.toolStat.extra=true end,
             function(g) g.toolStat.status="empty" end,function(g) g.toolStat.attemptedAt=0.5 end,
@@ -3089,7 +3099,12 @@ case("R6 name realm family filters and real native radio generator selection fal
     eq(NS.Data.expansions[synthetic.skillLineID],nil,"no production mapping added for fixture identity")
     local dropdown=ui.professionDropdown
     eq(dropdown.kind,"DropdownButton"); eq(dropdown.template,"WowStyle1DropdownTemplate"); eq(dropdown.defaultText,"All professions")
+    -- P01 ADAPT DROPDOWN BEGIN
+--[============[P01 ORIGINAL BEGIN
     eq(#dropdown.radios,9); eq(dropdown.radios[1].data,nil); eq(dropdown.radios[1].isSelected(nil),true)
+P01 ORIGINAL END]============]
+    eq(#dropdown.radios,14); eq(dropdown.radios[1].data,nil); eq(dropdown.radios[1].isSelected(nil),true)
+    -- P01 ADAPT DROPDOWN END
     local alchemy
     for i,radio in ipairs(dropdown.radios) do
         if i>1 then eq(radio.label,NS.Data.families[radio.data]); if i>2 then assert(dropdown.radios[i-1].label<radio.label,"deterministic labels") end end
@@ -7983,9 +7998,17 @@ case("E01 Inscription identity unchanged and unknown expansion identities still 
     local _,s=fixtureAPI(); local id=assert(D.Identity(s.info))
     eq(id.skillLineID,2913); eq(id.parentID,773); eq(id.profession,13); eq(id.expansionID,11); eq(id.name,"Inscription")
     eq(D.moxie[2913].id,3261); eq(D.moxie[2909].id,3258)
+    -- P01 ADAPT E01_REGISTRY BEGIN
+--[============[P01 ORIGINAL BEGIN
     local mapped={[2913]=true,[2909]=true,[2906]=true,[2907]=true,[2910]=true,[2914]=true,[2915]=true,[2918]=true}
     local count=0; for key in pairs(D.expansions) do assert(mapped[key]); count=count+1 end
     eq(count,8)
+P01 ORIGINAL END]============]
+    local mapped={[2913]=true,[2909]=true,[2906]=true,[2907]=true,[2910]=true,[2914]=true,[2915]=true,[2918]=true,
+        [2908]=true,[2911]=true,[2912]=true,[2916]=true,[2917]=true}
+    local count=0; for key in pairs(D.expansions) do assert(mapped[key]); count=count+1 end
+    eq(count,13)
+    -- P01 ADAPT E01_REGISTRY END
     for family in pairs(D.families) do
         -- 60000+family is an explicitly synthetic UNMAPPED skill line, not a proposed ID.
         local value,why=D.Identity({professionID=60000+family,parentProfessionID=333,
@@ -8256,13 +8279,24 @@ case("E02 exact eleven-entry catalogue provenance unique IDs and unchanged activ
     for name,entry in pairs(D.moxieCatalog) do
         count=count+1; eq(entry.id,expected[name]); eq(seen[entry.id],nil); seen[entry.id]=true
         local keys=0; for key in pairs(entry) do assert(key=="id" or key=="provenance"); keys=keys+1 end; eq(keys,2)
+        -- P02 ADAPT E02_PROVENANCE BEGIN
+--[=============[P02 ORIGINAL BEGIN
         local provenance=name=="Inscription" and "T01 user currency query; 70783" or
             (name=="Enchanting" and "User native currency query/UI agreement 2026-11-10" or
             "User-supplied list 2026-11-10; not native-verified")
+P02 ORIGINAL END]=============]
+        local provenance=name=="Inscription" and "T01 user currency query; 70783" or
+            (name=="Enchanting" and "User native currency query/UI agreement 2026-11-10" or
+            (name=="Herbalism" or name=="Mining" or name=="Skinning") and
+            "User native gathering capture/UI agreement 2026-11-19; 70961" or
+            "User-supplied list 2026-11-10; not native-verified")
+        -- P02 ADAPT E02_PROVENANCE END
         eq(entry.provenance,provenance)
     end
     eq(count,11); for name,id in pairs(expected) do eq(D.moxieCatalog[name].id,id) end
     count=0
+    -- P02 ADAPT E02_ACTIVE BEGIN
+--[=============[P02 ORIGINAL BEGIN
     local active={[2913]="Inscription",[2909]="Enchanting",[2906]="Alchemy",[2907]="Blacksmithing",
         [2910]="Engineering",[2914]="Jewelcrafting",[2915]="Leatherworking",[2918]="Tailoring"}
     for id,entry in pairs(D.moxie) do
@@ -8270,6 +8304,18 @@ case("E02 exact eleven-entry catalogue provenance unique IDs and unchanged activ
         eq(entry,D.moxieCatalog[active[id]])
     end
     eq(count,8)
+P02 ORIGINAL END]=============]
+    local active={[2913]="Inscription",[2909]="Enchanting",[2906]="Alchemy",[2907]="Blacksmithing",
+        [2910]="Engineering",[2914]="Jewelcrafting",[2915]="Leatherworking",[2918]="Tailoring",
+        [2912]="Herbalism",[2916]="Mining",[2917]="Skinning"}
+    for id,entry in pairs(D.moxie) do
+        assert(active[id]); count=count+1
+        eq(entry,D.moxieCatalog[active[id]])
+    end
+    eq(count,11)
+    -- P02 ADAPT E02_ACTIVE END
+    -- P01 ADAPT E02_REGISTRY BEGIN
+--[============[P01 ORIGINAL BEGIN
     local identities={[2913]={773,13,"T01 user 70783"},[2909]={333,9,"E01 user child-profession query 2026-11-10"},
         [2906]={171,3},[2907]={164,1},[2910]={202,8},[2914]={755,12},[2915]={165,2},[2918]={197,7}}
     count=0; for id,map in pairs(D.expansions) do
@@ -8281,6 +8327,25 @@ case("E02 exact eleven-entry catalogue provenance unique IDs and unchanged activ
         [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription"}
     count=0; for id,name in pairs(D.families) do eq(name,families[id]); count=count+1 end; eq(count,8)
     for _,family in ipairs({4,5,6}) do eq(D.families[family],nil) end
+P01 ORIGINAL END]============]
+    local identities={[2913]={773,13,"T01 user 70783"},[2909]={333,9,"E01 user child-profession query 2026-11-10"},
+        [2906]={171,3},[2907]={164,1},[2910]={202,8},[2914]={755,12},[2915]={165,2},[2918]={197,7}}
+    identities[2912]={182,4,"P01 user profession query 2026-11-18"}
+    identities[2916]={186,6,"P01 user profession query 2026-11-18"}
+    identities[2917]={393,11,"P01 user profession query 2026-11-18"}
+    identities[2908]={185,5,"P01 user secondary query 2026-11-18"}
+    identities[2911]={356,10,"P01 user secondary query 2026-11-18"}
+    count=0; for id,map in pairs(D.expansions) do
+        assert(identities[id]); count=count+1; eq(map.expansionID,11)
+        eq(map.parentID,identities[id][1]); eq(map.profession,identities[id][2])
+        eq(map.provenance,identities[id][3] or "E03 user batch child-profession query 2026-11-10")
+    end; eq(count,13)
+    local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
+        [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription",
+        [4]="Herbalism",[5]="Cooking",[6]="Mining",[10]="Fishing",[11]="Skinning"}
+    count=0; for id,name in pairs(D.families) do eq(name,families[id]); count=count+1 end; eq(count,13)
+    for _,family in ipairs({4,5,6}) do eq(D.families[family],families[family]) end
+    -- P01 ADAPT E02_REGISTRY END
 end)
 case("E02 injected Enchanting collector uses3258 dynamic balances zero and strict greater than600",function(checkpoint)
     local _,s,c=fixture()
@@ -8500,7 +8565,12 @@ case("E03 all six conflicting parent family own roster unknown and gathering ide
     end
     for _,family in ipairs({4,5,6}) do
         eq(D.Identity({professionID=60000+family,parentProfessionID=171,profession=family}),nil)
+        -- P01 ADAPT E03_FAMILIES BEGIN
+--[============[P01 ORIGINAL BEGIN
         eq(D.families[family],nil)
+P01 ORIGINAL END]============]
+        eq(D.families[family],({[4]="Herbalism",[5]="Cooking",[6]="Mining"})[family])
+        -- P01 ADAPT E03_FAMILIES END
     end
     eq(D.expansions[60009],nil); eq(D.moxie[60009],nil); verifyRegistry()
 end)
@@ -8761,7 +8831,22 @@ case("E04 exact six enchant categories provenance and no inferred amounts ranks 
     end
     eq(count,6); eq(D.enchants[9999],nil); eq(D.enchants[7978],nil); verifyRegistry()
 end)
+-- P01 ADAPT E04_LABEL BEGIN
+--[============[P01 ORIGINAL BEGIN
 case("E04 D F P full labels without new stat API keys or gathering identities",function()
+P01 ORIGINAL END]============]
+-- P02 ADAPT E04_LABEL BEGIN
+--[=============[P02 ORIGINAL BEGIN
+case("E04 D F P full labels with thirteen identities but no new stat API keys",function()
+P02 ORIGINAL END]=============]
+-- P03 ADAPT E04_LABEL BEGIN
+--[==============[P03 ORIGINAL BEGIN
+case("E04 D F P full labels with thirteen identities and verified F P stat API keys",function()
+P03 ORIGINAL END]==============]
+case("E04 D F P full labels with thirteen identities and evidenced D F P stat API keys",function()
+-- P03 ADAPT E04_LABEL END
+-- P02 ADAPT E04_LABEL END
+-- P01 ADAPT E04_LABEL END
     local categories={["Crafting Speed"]="C",Ingenuity="I",Multicraft="M",Resourcefulness="R",
         Deftness="D",Finesse="F",Perception="P"}
     local count=0
@@ -8769,15 +8854,44 @@ case("E04 D F P full labels without new stat API keys or gathering identities",f
         eq(labels[1],assert(categories[name])); eq(labels[2],name); eq(#labels,2); count=count+1
     end
     eq(count,7)
+    -- P02 ADAPT E04_KEYS BEGIN
+--[=============[P02 ORIGINAL BEGIN
     local keys={ITEM_MOD_CRAFTING_SPEED_SHORT="Crafting Speed",ITEM_MOD_INGENUITY_SHORT="Ingenuity",
         ITEM_MOD_MULTICRAFT_SHORT="Multicraft",ITEM_MOD_RESOURCEFULNESS_SHORT="Resourcefulness"}
     count=0; for key,labels in pairs(D.statNames) do eq(labels,D.statCategories[assert(keys[key])]); count=count+1 end
     eq(count,4)
+P02 ORIGINAL END]=============]
+    -- P03 ADAPT E04_KEYS BEGIN
+--[==============[P03 ORIGINAL BEGIN
+    local keys={ITEM_MOD_CRAFTING_SPEED_SHORT="Crafting Speed",ITEM_MOD_INGENUITY_SHORT="Ingenuity",
+        ITEM_MOD_MULTICRAFT_SHORT="Multicraft",ITEM_MOD_RESOURCEFULNESS_SHORT="Resourcefulness",
+        ITEM_MOD_FINESSE_SHORT="Finesse",ITEM_MOD_PERCEPTION_SHORT="Perception"}
+    count=0; for key,labels in pairs(D.statNames) do eq(labels,D.statCategories[assert(keys[key])]); count=count+1 end
+    eq(count,6)
+P03 ORIGINAL END]==============]
+    local keys={ITEM_MOD_CRAFTING_SPEED_SHORT="Crafting Speed",ITEM_MOD_INGENUITY_SHORT="Ingenuity",
+        ITEM_MOD_MULTICRAFT_SHORT="Multicraft",ITEM_MOD_RESOURCEFULNESS_SHORT="Resourcefulness",
+        ITEM_MOD_FINESSE_SHORT="Finesse",ITEM_MOD_PERCEPTION_SHORT="Perception",ITEM_MOD_DEFTNESS_SHORT="Deftness"}
+    count=0; for key,labels in pairs(D.statNames) do eq(labels,D.statCategories[assert(keys[key])]); count=count+1 end
+    eq(count,7)
+    -- P03 ADAPT E04_KEYS END
+    -- P02 ADAPT E04_KEYS END
+    -- P01 ADAPT E04_REGISTRY BEGIN
+--[============[P01 ORIGINAL BEGIN
     local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
         [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription"}
     count=0; for id,name in pairs(D.families) do eq(name,assert(families[id])); count=count+1 end; eq(count,8)
     local skills={[2906]=true,[2907]=true,[2909]=true,[2910]=true,[2913]=true,[2914]=true,[2915]=true,[2918]=true}
     count=0; for id in pairs(D.expansions) do assert(skills[id]); count=count+1 end; eq(count,8)
+P01 ORIGINAL END]============]
+    local families={[1]="Blacksmithing",[2]="Leatherworking",[3]="Alchemy",[7]="Tailoring",
+        [8]="Engineering",[9]="Enchanting",[12]="Jewelcrafting",[13]="Inscription",
+        [4]="Herbalism",[5]="Cooking",[6]="Mining",[10]="Fishing",[11]="Skinning"}
+    count=0; for id,name in pairs(D.families) do eq(name,assert(families[id])); count=count+1 end; eq(count,13)
+    local skills={[2906]=true,[2907]=true,[2909]=true,[2910]=true,[2913]=true,[2914]=true,[2915]=true,[2918]=true,
+        [2908]=true,[2911]=true,[2912]=true,[2916]=true,[2917]=true}
+    count=0; for id in pairs(D.expansions) do assert(skills[id]); count=count+1 end; eq(count,13)
+    -- P01 ADAPT E04_REGISTRY END
     for _,family in ipairs({4,5,6}) do eq(D.Identity({professionID=75000+family,parentProfessionID=202,profession=family}),nil) end
     verifyRegistry()
 end)
@@ -11020,7 +11134,12 @@ U11 ORIGINAL END]======]
 --[========[U12 ORIGINAL BEGIN
             eq(fallback.title.width,1096); eq(fallback.title:GetText(),"CraftArmy — observed crafting snapshots")
 U12 ORIGINAL END]========]
+            -- P01 ADAPT FALLBACK_TITLE BEGIN
+--[============[P01 ORIGINAL BEGIN
             eq(fallback.title.width,1108); eq(fallback.title:GetText(),"CraftArmy — observed crafting snapshots")
+P01 ORIGINAL END]============]
+            eq(fallback.title.width,1108); eq(fallback.title:GetText(),"CraftArmy — observed profession snapshots")
+            -- P01 ADAPT FALLBACK_TITLE END
             -- U12 ADAPT U08_FALLBACK END
             -- U11 ADAPT U08_FALLBACK END
             -- U10 ADAPT U08_FALLBACK_WIDTH END
@@ -11047,7 +11166,12 @@ U12 ORIGINAL END]========]
     eq(frame.style.SetBackdropBorderColor[4],1); eq(frame.style.SetBackdrop[1].edgeSize,1)
     eq(frame.style.SetBackdrop[1].bgFile,"Interface\\Buttons\\WHITE8X8")
     eq(frame.style.SetBackdrop[1].edgeFile,"Interface\\Buttons\\WHITE8X8")
+    -- P01 ADAPT TITLE BEGIN
+--[============[P01 ORIGINAL BEGIN
     eq(ui.title:GetText(),"CraftArmy — observed crafting snapshots"); eq(ui.close:GetText(),"X")
+P01 ORIGINAL END]============]
+    eq(ui.title:GetText(),"CraftArmy — observed profession snapshots"); eq(ui.close:GetText(),"X")
+    -- P01 ADAPT TITLE END
     frame.scripts.OnShow(frame); assert(frame.style.Raise); frame.scripts.OnMouseDown(frame)
     frame.scripts.OnDragStart(frame); assert(frame.style.StartMoving); frame.scripts.OnDragStop(frame); assert(frame.style.StopMovingOrSizing)
     click(ui.close); eq(frame.shown,false); ui:Toggle(); eq(frame.shown,true)
@@ -11140,7 +11264,12 @@ U12 ORIGINAL END]========]
             -- U12 ADAPT U08_STATUS END
             -- U11 ADAPT U08_STATUS END
             -- U10 ADAPT U08_STATUS_WIDTH END
+            -- P01 ADAPT TOOLBAR_TITLE BEGIN
+--[============[P01 ORIGINAL BEGIN
             eq(ui.title:GetText(),"CraftArmy — observed crafting snapshots")
+P01 ORIGINAL END]============]
+            eq(ui.title:GetText(),"CraftArmy — observed profession snapshots")
+            -- P01 ADAPT TOOLBAR_TITLE END
             eq(ui.titleIcon,icon)
         end
         geometry()
@@ -13661,7 +13790,12 @@ U14 ORIGINAL END]===========]
                 eq(widget.cells[I.Name].label.width,widget.row.guid==nextGUID and 96 or 106)
             end end
         end
+        -- R02 ADAPT U13_REFRESH BEGIN
+--[===============[R02 ORIGINAL BEGIN
         view:Refresh(); eq(marker:IsShown(),false); redrawPump(view,checkpoint)
+R02 ORIGINAL END]===============]
+        view:Refresh(); eq(marker:IsShown(),true); redrawPump(view,checkpoint)
+        -- R02 ADAPT U13_REFRESH END
         for _,bad in ipairs({false,7,"",string.rep("x",129),"bad\n","throw","missing"}) do
             if bad=="missing" then e.UnitGUID=nil
             else e.UnitGUID=function() if bad=="throw" then error("U13 GUID query") end; return bad end end
@@ -13724,7 +13858,14 @@ U14 ORIGINAL END]===========]
                     return result
                 end
                 local verify=frozen(e.CraftArmyDB)
+                -- R02 ADAPT U13_MARKER_NATIVE_DISPATCH BEGIN
+--[===============[R02 ORIGINAL BEGIN
                 if boundary=="Hide" or boundary=="IsShown" then view:Refresh() else view:Render() end
+R02 ORIGINAL END]===============]
+                if boundary=="Hide" or boundary=="IsShown" then
+                    view.options.character="R02 force unsafe demotion"; view:Refresh()
+                else view:Render() end
+                -- R02 ADAPT U13_MARKER_NATIVE_DISPATCH END
                 target[boundary]=original
                 if mode=="reentry" then assert(fired,boundary); eq(view.rows,newRows); eq(view.buildJob,newJob)
                 elseif boundary=="GetStringWidth" then eq(marker.points[1].x,98)

@@ -31,6 +31,317 @@ added; caches/credentials/runtime data excluded without deleting local files. Gi
 log and remote branch SHA are the delivery source of truth. No tags/releases/deployments
 authorized; future Git mutations need their own scope. No guide work begun.
 
+**2026-11-18 DASHBOARD COVERAGE PRIORITY:** user says a full dashboard view is important.
+Add **Herbalism, Mining, Skinning, Cooking and Fishing** dashboard tracking before guide
+work. Existing eight-profession dashboard sign-off remains valid; Inscription remains the
+first complete guide. This supersedes D05's original exclusion for dashboard coverage,
+not a commitment to five new guides or older-expansion/Archaeology support. Verify field
+applicability and own-character acquisition under Q03; unknown is not zero or N/A.
+Preserve all existing snapshots and accepted controls/layout. No new Git publication
+approval is implied. Feasibility/planning active; no expansion implementation writer yet.
+
+**2026-11-18 Fishing equipment clarification:** user screenshot/report confirms one
+profession slot for the rod; a fishing hat equips in the regular Head slot. Treat
+Fishing as rod-only in dashboard profession gear, with both accessory cells genuinely
+nonapplicable (no missing-gear attention). API-returned29/30 do not establish usable
+accessories. Do not add regular Head-slot tracking or alter accepted crafting gear.
+See [capability evidence](docs/dashboard/profession-expansion.md); implementation pending.
+
+**2026-11-19 expansion display decision:** user approves `—` for genuinely nonapplicable
+cells, with no attention warning or membership in that field's attention filter. Missing/
+unverified data remains unknown, not N/A; failed reads preserve known observations. This
+does not remove Cooking/Fishing from the Skill-below-cap filter. User has multiple Skinning
+characters available for focused gathering evidence; do not request profession changes.
+Next implementation proposal separates the thirteen-profession foundation/read-only
+gathering capture from later evidence-gated Moxie/Knowledge/stat activation. No writer yet.
+
+**2026-11-19 P01 execution approved:** user says “Yes, proceed” to implementing the scoped
+foundation/consolidated read-only capture and local tests. Execute the P01 contract with
+one synchronous implementer, then independent review and primary acceptance. No guide,
+future mapping/accounting/stat activation, native acceptance, install, commit/push or
+release authorization is inferred. Preserve all pre-existing planning/archive work.
+
+**2026-11-19 P01 local delivery:** thirteen-family capability foundation and consolidated
+read-only gathering evidence profile implemented. Writer reports final16additive groups/
+219173assertions,512legacy/all19/744K6/565K7/23/Python/whitespace PASS; exact preservation
+proofs in TASKS. Frozen for independent review; no primary/native acceptance yet. Gathering
+Moxie/Knowledge/stat activation and secondary Moxie applicability remain evidence-gated.
+
+**2026-11-19 P01 locally accepted:** independent full-scope STATIC review PASS/no confirmed
+finding; independent shell/tests/hash computation denied and NOT RUN, not reattributed.
+PRIMARY serial local suites/comparisons and post-review11target freeze PASS. Accept only
+the foundation/read-only evidence milestone, not new native/all-field acceptance. Next is
+user-run new-profession normal use and one gathering report per Herbalism/Mining/Skinning;
+no repeats of accepted old checks, resets/learning/gear changes or new Git approval.
+Review/provenance → [P01 review](docs/dashboard/expansion-p01-review.md).
+
+**2026-11-19 P01 gathering evidence received:** user supplies complete/stable/untruncated
+Mining, Herbalism and Skinning reports on12.1.5/build70961, Interface120105. Both completeness
+flags true;36total paths, per-profession shared-spend reconciliation matches. Moxie IDs/
+names/balances and Finesse/Perception intrinsic-key evidence recorded; Deftness still
+unverified. Skinning's observed105cap/modifier40 stay separate, not hardcoded to100.
+User subsequently confirms all reported numbers match native UI; focused value agreement
+resolved, not broad/error-free/latency acceptance or activation authority. No more dumps.
+[Evidence and remaining gates](docs/dashboard/gathering-native-evidence.md).
+
+**2026-11-19 refresh concern:** user reports estimated Concentration disappears then
+returns during apparently periodic refreshes; cadence/trigger unknown. PRIMARY local
+widget probe reproduces retained-build estimate demotion/restoration;30second estimate
+repaint alone keeps it visible at callback return. Guard predates P01. Read-only
+[investigation](docs/dashboard/concentration-refresh-investigation.md); no source fix or
+writer authorized. Any safe-refresh exception to retained observed-only needs its own
+contract; gathering activation remains separate.
+
+**2026-11-19 priority confirmed:** user directs finishing Herbalism, Mining, Skinning,
+Cooking and Fishing dashboard work first, then following up with the Concentration
+flicker fix. Defer further flicker work until profession coverage is complete; retain
+the investigation for that follow-up. Next is the evidence-gated profession activation
+scope, not a flicker writer or guide work. Separate implementation contracts still apply.
+
+**2026-11-19 P02 preparation approved:** user says “Then lets proceed” to preparing the
+next scoped activation task for approval. [P02 proposal](docs/dashboard/expansion-p02-contract.md)
+activates the three verified gathering Moxie/Knowledge mappings and F/P Tool keys, using
+existing guarded accounting/storage/display. Preserve five-profession skill/cap/slot
+safety independently of Moxie mode. No Deftness/secondary Moxie/enchant-warning guesses;
+no flicker or guide work. Implementation approval remains pending; no writer/source edits.
+
+**2026-11-19 P02 implementation approved:** user answers “Yes” to P02 implementation
+and local tests. Execute the complete [P02 contract](docs/dashboard/expansion-p02-contract.md)
+with one synchronous implementer, then independent review/primary acceptance. Preserve
+actual accepted uncommitted P01 baseline and unrelated work using repo-local comparison
+artifacts. No flicker, unverified capability activation, install or Git/release authority.
+
+**2026-11-19 P02 locally accepted:** three gathering Moxie/Knowledge mappings and F/P
+Tool stats activated, preserving exact-five skill/cap/slot safeguards. Independent full-diff
+STATIC PASS/no findings; independent executable verification INCOMPLETE after shell denial.
+PRIMARY serial new12/13223,P01=16/220754,legacy512/all19/K6K7,diagnostics23/Python and
+exact preservation/post-review freeze PASS. [Review/attribution](docs/dashboard/expansion-p02-review.md).
+No native five-profession sign-off inferred; next is new active dashboard normal use,
+not repeated reports/old checks. Deftness, secondary Moxie and new enchant-warning evidence
+remain open. No writer, installation, Git mutation or flicker/guide work.
+
+**2026-11-19 P02 native feedback:** user confirms Herbalism/Mining/Skinning values match
+on the dashboard; focused numeric acceptance, not unreported full normal-use/timing proof.
+Knowledge bars are grey: Data lacks gathering tab palette entries and uses neutral fallback
+(P02 explicitly retained it). User confirms Cooking/Fishing have **no Moxie**; their Moxie
+cells should follow accepted `—`/no field-attention policy, not remain pending forever.
+User's older-expansion Skinning Tool screenshot shows native raw
+`ITEM_MOD_DEFTNESS_SHORT:110` matching +110Deftness and explicit no enchant/ID0; key evidence
+received without needing a newer tool. Separate neutral-query result/build not shown.
+Proposed next scoped update: secondary Moxie N/A, verified gathering tab colours, Deftness
+key/category recognition with existing guards. No implementation authorized yet; permanent
+tool-enchant eligibility remains unresolved and independent. [Evidence](docs/dashboard/gathering-native-evidence.md).
+
+**2026-11-19 permanent-enchant applicability:** user definitely confirms Herbalism,
+Mining and Skinning support permanent Tool enchants. Gathering warning eligibility is
+resolved for the next scoped task; existing observed-absence/freshness/instance safeguards
+remain required. User only believes Cooking/Fishing support them and currently has no
+enchanted Tools for those professions; keep their warning eligibility pending, not N/A
+or enabled. User's offer to enchant them is not authorization to spend/apply/change gear.
+No such action is needed to proceed with independently verified gathering work. Proposed
+follow-up now covers secondary Moxie N/A, gathering colours, D recognition and gathering
+missing-enchant warnings. No new implementation approval/writer; flicker remains deferred.
+
+**2026-11-19 P03 approved:** user explicitly answers “Yes” to the four-part follow-up:
+secondary Moxie N/A, gathering Knowledge colours, guarded Deftness recognition and gathering
+missing-enchant warnings. [P03 contract](docs/dashboard/expansion-p03-contract.md) settles
+scope/tests/ownership; one synchronous implementer, independent review then primary
+acceptance. Cooking/Fishing warnings stay pending; no purchases/gear changes, flicker,
+guides, installation or Git/release authority. Preserve accepted uncommitted P02 baseline.
+
+**2026-11-19 P03 locally accepted:** all four refinements implemented. Secondary Moxie
+N/A, stable9gathering tab colours, guarded D key/category and gathering observed-absence
+warnings; secondary warnings remain pending. Independent full STATIC PASS/no findings;
+independent executable verification INCOMPLETE after shell denial. PRIMARY serial
+P03=15/31244,P02=12/13223,P01=16/220990,512/all19/K6K7/23/Python/whitespace and exact
+reversals/protected/post-review freeze PASS. [Review](docs/dashboard/expansion-p03-review.md).
+No new native acceptance inferred: next ordinary four-feature check, no repeat gathering
+number interview, dumps, gear changes or purchases. No writer/install/Git/flicker/guides.
+
+**2026-11-19 P03 focused native acceptance:** user confirms secondary Moxie dash,
+gathering Knowledge colours, Deftness D and gathering-only missing-enchant behavior. All
+four refinements accepted; no repeat checks. This does not establish Cooking/Fishing
+permanent-enchant ineligibility (still provisional), global timing/error-free use or a
+new overall dashboard sign-off. Profession-first follow-up can now return to flicker.
+User adds current-player dot also disappears during refresh. PRIMARY read-only widget
+probe reproduces BOTH dot and estimate hidden while replacement builds, restored at
+publication;30second repaint alone keeps both visible at callback return. Saved graph/
+token unchanged. Combined refresh-fix scope next, not separate profession work; no source
+fix/writer authorized yet. [Combined investigation](docs/dashboard/concentration-refresh-investigation.md).
+
+**2026-11-19 R02 approved:** user answers “Yes” to the combined refresh fix. The
+[R02 contract](docs/dashboard/refresh-r02-contract.md) specifies a private last-good visible
+paint cache and guarded, frozen pending-build continuity. Same active-generation current
+identity dot may persist; estimate additionally needs unchanged successful Concentration
+observation provenance. Invalid/detached/removed/retired/superseded/failed or changed-GUID/
+options paths retain safe cleanup. No prediction-driven saves/sort/attention, new scans or
+timer frequency changes. One synchronous implementer, independent review then acceptance;
+no install/Git/guide authority. This narrowly supersedes unconditional retained suppression.
+
+**2026-11-19 R02 locally accepted:** guarded frozen estimate/dot continuity implemented;
+review findings for backward clocks, preparation ownership and exception cleanup resolved.
+Independent full-scope STATIC PASS/no remaining findings; independent executable/comparison
+verification INCOMPLETE/NOT RUN after denial, no bypass or reattribution. PRIMARY serial
+58groups/902323 plus P01–P03/512/all19/K6K7/23/Python/whitespace and exact frozen-target/
+preservation proofs PASS. [Review and attribution](docs/dashboard/refresh-r02-review.md),
+full acceptance/hashes in TASKS. Focused native continuity check next during ordinary refreshes,
+not repeat profession checks or a full native suite. Actual trigger/frequency/latency remain
+unknown; no native acceptance, estimate-accuracy proof, installation, Git or guide authority.
+
+**2026-11-19 R02 native follow-up / V01:** user reports both indicators still disappear
+during refresh; R02 native continuity is NOT accepted. Running-client code identity is
+unknown, not presumed old or current. User requests an identifiable tested version. V01
+adds loaded-dashboard identifier `0.2.0-mvp+r02.1` to the existing status tooltip on Shift,
+leaving header/normal tooltips/layout unchanged. Identifier is embedded in Dashboard.lua,
+not inferred from unchanged TOC `0.2.0-mvp` or initial Git HEAD. It labels this source delivery,
+not proof every installed file matches or a fix for the continuing native symptom. No
+install/copy/Git authority; establish loaded build before further flicker changes.
+
+**2026-11-20 V01 locally accepted:** loaded Dashboard build `0.2.0-mvp+r02.1` appears in
+existing Shift status tooltip. Normal header/layout/TOC and all R02 continuity bytes
+unchanged. Independent full STATIC PASS/no findings; independent execution unavailable,
+NOT RUN after denial. PRIMARY all9serial commands61/1333822 plus P01–P03/512/all19/K6K7/
+23/Python/whitespace PASS; hashes/proofs in TASKS. No WoW copy/install performed or assumed;
+running-client identity and continuing native flicker remain unresolved. Ask for marker only.
+
+**2026-11-20 V01 marker confirmed / R02 native failure persists:** user confirms expected
+Dashboard build and reports both indicators still disappear during refresh. Loaded Dashboard
+marker accepted; do not ask for it again or assume an outdated Dashboard. This does not hash
+the entire installation. R02 native continuity remains NOT accepted; local historical passes
+remain valid but insufficient for real collection transitions.
+
+PRIMARY read-only production-callback probe reproduces three sequences: (A) event during
+pending build, dashboard frame before queued Scan clears BOTH; successful replacement
+restores both; (B) queued Scan first keeps dot but clears estimate; (C) successful Scan from
+completed view with unchanged amount/new timestamp keeps dot but clears estimate. No source/
+test changes; actual Commands/Collectors/Dashboard methods, synthetic APIs/order only.
+[Evidence/proposed follow-up](docs/dashboard/concentration-refresh-investigation.md).
+Propose separately scoped R03 collection-handoff continuity: independently revalidate dot
+identity across ordinary collection churn and atomically replace verified Concentration
+display rather than blank old projection while full view builds. New observation safety,
+unknown/failure cleanup, no prediction saves/sort/attention and reentry ownership remain.
+No new runtime task/implementation authorized yet; user approval and complete contract next.
+
+**2026-11-20 R03 approved:** user answers “Yes” to focused collection-handoff correction.
+[R03 contract](docs/dashboard/refresh-r03-contract.md) specifies explicit private collector
+handoff signal, bounded guarded dashboard revalidation and coherent replacement Concentration
+from a renewed successful observation. No generic drift bypass or obsolete cyan over new
+observed data; zero-gain renewal may correctly become blue-only. Build advances to
+`0.2.0-mvp+r03.1`. One synchronous writer then independent review/primary acceptance;
+no install/Git/guide authority. Prior native R02 remains unaccepted; no new native claim.
+
+**2026-11-20 R03 locally accepted:** explicit collector handoff and guarded coherent
+Concentration replacement implemented, loaded build `0.2.0-mvp+r03.1`. Independent full
+STATIC PASS/no findings; independent execution/comparison NOT RUN after denial, no bypass/
+reattribution. PRIMARY31/860393 newgroups,61/1333822 refresh, P01–P03/512/all19/K6K7/23/
+bothPython/whitespace plus exact reviewed target/preservation proofs PASS. [Review](docs/dashboard/refresh-r03-review.md),
+hashes/evidence in TASKS. Focused ordinary-refresh native outcome pending; zero-gain renewal
+correctly becomes observed-only rather than keeping obsolete cyan. No installer/copy/Git/
+guide/native success authority; previous R02 native failure remains documented.
+
+**2026-11-20 R03 native follow-up FAILED:** user confirms expected r03.1 Dashboard build
+and reports both current-player dot and Concentration estimate disappear until refresh
+completion. Do not repeat version verification, explain this away as legitimate cyan-to-
+blue conversion, or claim native resolution from local passes. Local review/test evidence
+remains historical local evidence; actual native fallback/trigger still unidentified.
+Primary inspected remaining cache/validation/retention/publication paths read-only; no new
+runtime edits or diagnosis established. Next one focused existing Shift/status tooltip
+capture while indicators are missing, before further speculative changes. No forced scan,
+profession retest, reset, install/copy/Git or new fix/instrumentation authority inferred.
+
+**2026-11-20 screenshot / R04 concrete API mismatch:** screenshot shows normal retained
+incremental build, raw status “Open your own profession to refresh”, r03.1, Active/All and
+45rows. No visible build-failure status. PRIMARY reproduced the same hide-until-completion
+and pending/raw status by changing ONLY private fixture FontString empty GetText return
+from empty string to nil, with icon-only gear rendering a deliberately blank label.
+Current API documents optional nil text; historical widget reference explicitly documents
+nil for empty string. demoteVisible treats successful nil as error and discards continuity/
+cache. Existing mocks always return empty string, masking this contract mismatch.
+Full saved-root/token/project-source preservation PASS. This is a deterministic local
+native-contract reproduction, not tracing the exact native call in the user's client.
+[Evidence and proposal](docs/dashboard/concentration-refresh-investigation.md).
+Propose narrow R04 normalization of successful nil label reads to blank, retain thrown/
+other non-string failure behavior, native-compatible mock/regressions and advanced build
+marker. No further screenshot/version check needed; implementation approval pending.
+
+**2026-11-20 R04 approved:** user answers “Yes” to narrow empty-FontString correction and
+native-compatible regressions. TASKS R04 contract: successful nil read normalized to blank
+after ownership check, genuine errors/non-string types remain fail-closed; native mock
+corrected, build `0.2.0-mvp+r04.1`. No collection/model/continuity-policy redesign. One
+synchronous writer, review/primary acceptance; native result remains pending, no install/Git.
+
+**2026-11-20 R04 locally accepted:** narrow successful-nil normalization after ownership
+check, native-compatible mock and nine regression groups, build `0.2.0-mvp+r04.1`.
+Independent full STATIC PASS/no findings; executable/comparison verification NOT RUN after
+denial, no bypass/reattribution. PRIMARY all11serial commands: new9/1338363, collection31/
+860393, refresh61/1333822 plus P01–P03/512/all19/K6K7/23/Python/whitespace and exact frozen
+source/protection proofs PASS; review and hashes in TASKS R04. No collection/model policy
+change or native resolution inferred. Next only ordinary-refresh behavior feedback, not
+more screenshots/marker interviews. No installer/copy/Git/guide authority.
+
+**2026-11-20 R04 focused native acceptance:** user says “That has fixed it, good job”
+after testing the correction. Accept the reported Concentration-estimate/current-player-dot
+refresh continuity fix in WoW. No repeat refresh check, screenshot or marker interview.
+This does not infer measured latency, exact event cadence, offline estimate accuracy,
+broader new-profession acceptance or completed native full suite. No further source work,
+installation, Git/release or guide authority; local historical evidence/limits preserved.
+
+**2026-11-20 secondary Tool evidence update:** user finds an existing Cooking Tool with
+a **Multicraft permanent enchant**, confirming Cooking enchant applicability. Cooking's
+missing-enchant warning gate is now evidence-resolved for a scoped follow-up; current
+disabled/pending implementation is not ineligibility. User reports Cooking Tools have a
+fixed multi-stat mix rather than a selectable single intrinsic stat, with amounts varying
+by rarity/quality. Exact base stat names/numbers and enchant ID/rank not supplied; do not
+derive a base Multicraft category from the enchant. User reports crafted Fishing Tools
+intrinsically provide **Perception**, amount varying with rarity/quality; this does not
+establish all historical/dropped rods or fixed amounts. Fishing enchants remain unverified:
+user has not tried one. No further purchases/applications/gear changes/dumps needed.
+[Recorded evidence](docs/dashboard/gathering-native-evidence.md). No new source task or
+implementation authorization from this report; propose Cooking-only warning eligibility,
+with safe observed/enchant-neutral stat handling preserved and no guessed single Cooking
+letter or Fishing enchant rule. R04 focused native acceptance remains complete.
+
+**2026-11-20 P04 approved:** user answers Yes to enabling **Cooking-only Missing enchant**
+warning, leaving Fishing unchanged. TASKS P04 contract changes only exact Cooking policy
+eligibility, reusing existing confirmed-absence/unknown/last-observed/fresh/archive/filter
+semantics. No intrinsic stat UI/letter change, guessed base stat or new enchant ID. Build
+marker advances to `0.2.0-mvp+p04.1`; R04 fix bytes otherwise unchanged. One synchronous
+writer/review/primary acceptance; no buys/gear changes/dumps/install/Git/guide authority.
+
+**2026-11-20 P04 locally accepted:** Cooking Missing enchant warning/filter enabled;
+Fishing remains pending. One exact Data policy change and Dashboard build literal
+`0.2.0-mvp+p04.1`, all stat presentation and R04 continuity logic unchanged. Independent
+full STATIC PASS/no findings; independent execution/comparison NOT RUN after denial, no
+reattribution. PRIMARY all12serial commands Cooking12/81992 plus R04/R03/61/P01–P03/512/
+all19/K6K7/23/Python/whitespace and exact protected/frozen-target proofs PASS; review/hashes
+in TASKS P04. P04 native behavior pending normal use, no purchases/applications/gear changes,
+repeat accepted checks or new dumps needed. R04 focused native acceptance remains complete.
+
+**2026-11-20 P04 focused native acceptance:** user says “Confirmed” to Cooking's missing-
+enchant warning/filter. Accept that scope; Fishing remains pending/unverified, not ineligible.
+No repeat Cooking/refresh checks, purchases, applications, gear changes or reports needed.
+
+**2026-11-20 scrolling-performance requirement (U16 investigation):** user reports CraftArmy
+scrolling pauses patrolling NPCs/world animations, unlike the comparable WeeklyKnowledge
+list, and asks render to display known data rather than process/calculate it. Prepare
+expensive data incrementally outside painting; merely moving the same stall into a
+synchronous pre-render helper is not a solution. Preserve accepted data/filter/sort/tooltip/
+dot/Concentration and Cooking/Fishing behavior. PRIMARY read-only48/96-row profile confirms
+per-paint storage expansion plus extensive duplicate safety/native dispatch; timings are
+synthetic host CPU, not WoW latency or sole native cause. [Evidence and proposed separation](docs/dashboard/scroll-performance-investigation.md).
+Runtime unchanged; complete scoped design/contract before one writer/review/acceptance.
+No install/copy/Git/release/guide authority or repeated native diagnostics/accepted checks.
+
+**2026-11-20 U16 approval with Git prerequisite:** user approves the proposed scrolling
+refactor **but requires existing work committed and pushed to origin first**. Scoped Git
+authorization: checkpoint existing reviewed addon/tests/docs and current investigation/
+planning on local `main`, then normal fast-forward push to `origin/main` at public
+`Arbixal/craftarmy`. Exclude ignored artifacts/captures/runtime files/secrets. No force push,
+tag, release, installation or future refactor commit/push authorization inferred. U16 source
+work waits for verified matching local/remote checkpoint; then finish the implementation
+contract before one synchronous writer/review/acceptance. Historical no-Git labels are
+superseded only for this explicit checkpoint operation.
+
 **2026-11-18 next step:** user approves preparing a dashboard gap checklist. The
 [focused completion checklist](docs/dashboard/completion-checklist.md) separates six
 remaining normal-use checks from accepted work and explicit semantic limitations.
@@ -235,13 +546,16 @@ confirmed missing item or confirmed absent enchant. Remaining API semantics stay
 
 ### D05 — Initial scope, audience, and delivery order 🔨
 
-- First release targets Midnight's eight primary crafting professions: **Alchemy,
+- Dashboard targets Midnight's eight primary crafting professions: **Alchemy,
   Blacksmithing, Enchanting, Engineering, Inscription, Jewelcrafting, Leatherworking,
-  Tailoring**. Older expansions, gathering, Cooking and Fishing remain outside scope.
-  Verify exact supported client/build APIs under Q03.
+  Tailoring**, plus **Herbalism, Mining, Skinning, Cooking and Fishing** per the user's
+  2026-11-18 full-overview priority. The eight crafting professions are implemented and
+  signed off; the five additions need capability/API validation and implementation.
+  Older expansions and Archaeology are not included. Verify client/build APIs under Q03.
 - Build personal-first, structured for later publication. Defer distribution-platform
   integration and broad localization, not correctness or data safety.
-- Validate APIs, **complete the dashboard, then one complete Inscription guide** before
+- Validate APIs, **extend dashboard coverage to all thirteen named professions, then one
+  complete Inscription guide** before
   expanding guide coverage. Guide work remains committed, not cancelled.
 - Eight verified crafting identities/Moxie mappings are implemented. K08 focused native
   capture/value/normal-use evidence and K09 numeric Knowledge implementation/review/
@@ -250,7 +564,8 @@ confirmed missing item or confirmed absent enchant. Remaining API semantics stay
 - Supplied enchant categories retain provenance; inclusion is not blanket native proof
   of every ID/rank/amount. Blank means confirmed absence; `?` unknown/unmapped. Never
   infer amounts, API keys or gathering support from names or similar IDs.
-- Source: Round 1 accepted recommendations, 2026-11-05; subsequent confirmed E01–E05,
+- Source: full-dashboard priority2026-11-18 supersedes original dashboard exclusion;
+  Round 1 accepted recommendations, 2026-11-05; subsequent confirmed E01–E05,
   K08/K09 refinements, November 10–16. Full history/evidence →
   [D05 history](docs/decisions/D05-history.md), [Q01](docs/questions/Q01.md),
   [Q03](docs/questions/Q03.md), [Q06](docs/questions/Q06.md).

@@ -4,6 +4,37 @@
 decisions. Open either first. These archives preserve historical contracts and reports,
 not permission to resume superseded instructions.
 
+## 2026-11-18 extraction map
+
+User approved the twelve-queue archive manifest plus a prior status/housekeeping snapshot.
+Pre-cleanup TASKS.md had4521lines/34884words;4312lines (95.4%) were completed queue bodies.
+All twelve queues have no unchecked implementation pieces. Genuine open conditions and
+the new five-profession dashboard priority remain in current TASKS, now156lines/1567words.
+
+| Archive | Pre-cleanup TASKS lines | Run date | Scope |
+| --- | --- | --- | --- |
+| [U15](archive/U15.md) | 125–427 | Nov18 | Native normal gear hovers, concise tooltips, Shift diagnostics |
+| [U14](archive/U14.md) | 428–748 | Nov18 | Moxie brightness, coalesced scrolling and thumb bounds |
+| [U13](archive/U13.md) | 749–1307 | Nov18 | Moxie, observed/estimated Concentration, scrollbar, current-character grouping |
+| [U12](archive/U12.md) | 1308–1542 | Nov18 | Natural-size Tool letter and outer Gear gutters |
+| [U11](archive/U11.md) | 1543–1855 | Nov17 | Decorated-link metadata fix and compact gear spacing |
+| [U10](archive/U10.md) | 1856–2622 | Nov17 | Combined gear icons and intrinsic Tool metadata |
+| [U09](archive/U09.md) | 2623–2955 | Nov17 | Concentration bar and initial tooltip-only estimates, later superseded by U13 |
+| [U08](archive/U08.md) | 2956–3181 | Nov17 | Dashboard title icon |
+| [M01](archive/M01.md) | 3182–3412 | Nov17 | Original/packaged icon assets and manifest |
+| [U07](archive/U07.md) | 3413–3837 | Nov17 | Skill-only attention/filter and marker refinement |
+| [U06](archive/U06.md) | 3838–4106 | Nov17 | Skill progress bar |
+| [R01](archive/R01.md) | 4107–4436 | Nov17 | Retain completed table during incremental redraw |
+| [Prior status/housekeeping](archive/dashboard-status-2026-11-18.md) | 1–124 and4437–4521 | Nov18 snapshot |209lines including superseded pending sign-off/checklist text |
+
+Dates are2026 run dates, not a claim that all later focused acceptance occurred that day.
+All4521original lines are preserved across these thirteen files. Only33relative Markdown
+targets were mechanically rebased; inverse comparisons restore the exact original bytes.
+The historical snapshot retains stale pending-sign-off/C1–C6 text, but current TASKS does
+not ask for those completed milestones again. Native/API/estimate evidence limitations
+remain explicit, not marked complete by the move. No existing archive was overwritten.
+All137pre-cleanup TASKS heading/explicit anchors remain in current TASKS for compatibility.
+
 ## 2026-11-17 extraction map
 
 User approved the archive layout before mutation. Original TASKS.md had11557lines/
@@ -41,6 +72,10 @@ Its T01-R1 result remains in the complete T01 history and diagnostic evidence.
   [schema](../dashboard/schema.md) — persisted meaning, adapters, migration safeguards.
 - [S01 review](../dashboard/s01-review.md) — exact reviewed source/check hashes and limits.
 - [Dashboard evidence](../dashboard/evidence.md) — actual outcomes, failures and provenance.
+- [Profession expansion audit](../dashboard/profession-expansion.md) — current five-profession
+  capability gaps, proposed display rules and next read-only native identity query.
+- [Icon asset manifest](../../CraftArmy/Media/Icons/README.md) — packaged assets, original
+  preservation and exact hashes; no new artifact inventory is hidden only in the archives.
 - [Diagnostic guide](../diagnostics/README.md) and
   [evidence](../diagnostics/evidence.md) — harness/artifact inventory and unchanged baseline.
 - Local entry points: `tests/dashboard.lua`, `tests/run.lua`,
@@ -55,3 +90,5 @@ Its T01-R1 result remains in the complete T01 history and diagnostic evidence.
 Legacy top-level task anchors, especially T02 links from PLAN/Q03/Q06, remain in the
 current TASKS Done index and lead to these archives. Existing question histories were
 not rewritten. Only new dated feedback was appended where current acceptance changed.
+The2026-11-18cleanup also preserves every then-existing heading/explicit anchor, including
+generic section aliases that now sit beside the matching archived queue's index row.

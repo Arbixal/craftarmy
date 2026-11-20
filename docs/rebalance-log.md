@@ -282,3 +282,57 @@ No automatic cooling rules promoted yet.
   execution/comparison limitations and missing external bundle remain unchanged.
   No writer, redraw/source/test change, repeated capture/IDs/full-selftest chase,
   dependency/game installation, private data reads, Git operation, publication or release.
+
+### 2026-11-18 — TASKS completed-queue eviction (4521 → 156 lines)
+
+- User requested “Cleanup TASKS.md”, then explicitly confirmed “Yes” to the proposed
+  twelve-queue archive manifest, prior status/housekeeping snapshot, current-state rewrite,
+  history index, reusable lessons and this ledger. No active implementation writer.
+- Full planning workflow present; PLAN696lines/5345words is below15000word threshold.
+  No PLAN rebalance, agent/source edits or unrelated history relocation performed.
+- Before: TASKS4521lines/34884words,50checked and3unchecked boxes. Completed queue bodies
+  occupied4312lines/95.4%. No unchecked implementation pieces inside the twelve queues.
+- Created `docs/tasks/archive/{U15,U14,U13,U12,U11,U10,U09,U08,M01,U07,U06,R01}.md` and
+  `docs/tasks/archive/dashboard-status-2026-11-18.md`; no existing archive overwritten.
+  Source ranges and run dates are indexed in `docs/tasks/README.md`. Queue wording is
+  preserved, with33relative Markdown targets rebased mechanically. Snapshot retains the
+  other209lines, including stale status/open/deferred/index/maintenance wording.
+- Backup taken BEFORE changes at
+  `/tmp/opencode/craftarmy-task-cleanup-20261118-6g8r1e45/TASKS.md.bak`.
+  Original SHA256:
+  `23075cbc91c5c36eba57f216bb860ecadf95201d17eafcf8f414445a069563ff`.
+  Same directory holds `before-files.json` (136original files), `archive-manifest.json`
+  (ranges, hashes and exact link-token transformations) and `original-anchors.json`.
+- Current TASKS156lines/1567words retains accepted crafting-dashboard sign-off, the
+  five-profession expansion priority/API-capture gate, no executable queue/writer, open
+  semantics/attribution/estimate/evidence limits, deferred guides/Details/parked work,
+  validation rules and all23queue-history links. No fixed cap/reset/forced-recovery scan.
+- Removed stale pending dashboard sign-off/C1–C6 instructions from the LIVE view and
+  updated resolved redraw/old milestone summaries. Exact old wording survives in the
+  historical snapshot. No unresolved field or native evidence condition marked PASS.
+- All137pre-cleanup TASKS heading/explicit anchors retained. Old generic section anchors
+  now sit beside their matching queue index rows, leading readers to the archive.
+- Reusable hyperlink/instance-metadata, normal-vs-Shift tooltip, observed-vs-estimated,
+  filtering/grouping and redraw/coalescing lessons added to the existing operational
+  reference. Existing addon/script/asset inventories remain in their READMEs/manifest;
+  the task index links current capability research and the icon manifest.
+- AGENTS already states check→collapse→evict, confirmed manifests, no active writer and
+  the what-never-leaves rule; no conductor edit needed. No automatic cooling rule promoted.
+- Final retention verification PASS: all14source segments in13archives, with33link rebases
+  reversed, reconstruct the entire original4521-line file byte-for-byte. No gaps or lost
+  lines. All137original heading/explicit anchors retained; no duplicate explicit aliases.
+- Final scope verification PASS: exactly4approved existing docs changed (TASKS, task
+  index, operational reference and this log),13new docs, no original paths removed.
+  Other132original files hash-identical, including addon/diagnostics/tests/tools/media/
+  agent configuration and all pre-existing uncommitted planning/question/audit work.
+  Results recorded in `verification.json` alongside the backup/manifest.
+- `python3 tools/check_dashboard.py`:PASS17required/85Markdown/468local links and anchors,
+  eight diagnostic hashes unchanged. `python3 tools/check_diagnostics.py`:PASS9required/
+  exact packaging/order/metadata. `git diff --check`:PASS. Structural/documentation and
+  retention evidence only, not Lua/native validation. TASKS line reduction96.55%; word
+  reduction95.51%. All current-state limits and deferred work remain visible.
+- No Lua/native suite execution claimed; existing512/all19/744K6/565K7/23 results are
+  retained history only. Full native **INCOMPLETE87/149**, all-rank **UNVERIFIED**, quantified
+  offline estimate accuracy and independent-execution limits remain unchanged.
+- No addon/tests/tools/media edits, new writer/delegation, dependency/game installation,
+  private SavedVariables access, gameplay/reset actions, commit/push/publication or release.

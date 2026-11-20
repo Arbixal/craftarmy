@@ -1,3 +1,191 @@
+# P04 — Cooking missing-enchant warning
+
+Cooking Tool permanent-enchant applicability is user-confirmed from an existing
+Multicraft-enchanted Tool. P04 enables the existing **Missing enchant** warning/filter
+only for Cooking, in addition to previously enabled professions. Confirmed zero/empty
+enchant IDs warn; positive IDs suppress the warning even if their category is unknown.
+Unknown/unloaded/conflicting evidence is not absence. Retained same-instance absence
+may warn as **last observed**, never fresh; archives have no attention warnings.
+
+Fishing eligibility stays **pending**, not ineligible, even with observed absence.
+Cooking Tool26/accessory27, Fishing rod28 only, N/A cells and secondary Skill filtering
+are unchanged. No stat UI, guessed Cooking base letter, new enchant ID or rank/amount
+mapping is added. Test IDs and multi-stat amounts are synthetic, not new native proof.
+
+Loaded Dashboard build: `0.2.0-mvp+p04.1` in the existing Shift/status tooltip. All R04
+empty-FontString and R03 handoff/continuity bytes are unchanged apart from that literal.
+R04 refresh continuity is already user-accepted; no repeat refresh/marker interview.
+
+`lua5.1 tests/cooking_enchant.lua` covers actual collection/storage/view/widget paths
+in both schemas, fresh/history/unknown/changed-instance/archive/filter safety and native
+normal versus Shift diagnostic hovers. Local fixtures are not native-client acceptance.
+Implementation, independent review and primary acceptance remain separate in
+[P04 run state](../../TASKS.md#p04--cooking-missing-enchant-warning).
+No purchases, applications, gear changes, dumps, install/copy, Git or guide authority.
+Full native87/149 remains INCOMPLETE; all-rank costs and estimate accuracy unverified.
+
+Earlier documentation below is preserved history; current P04/R04 acceptance and limits
+above supersede older pending/follow-up wording, not the existing safety boundaries.
+
+# R04 — Empty native FontString continuity correction
+
+R03 native follow-up failed on confirmed r03.1: both indicators disappeared until refresh
+completion. The screenshot showed an ordinary saved-view build, not a build-failure status.
+A controlled local reproduction found that an intentionally blank icon-only gear label
+returns nil under the documented native FontString contract. Previously that successful
+read was misclassified as failure and discarded verified continuity/cache.
+
+R04 normalizes only successful nil reads to blank **after** the existing ownership check.
+Thrown reads and other invalid types still fail closed; warning recolouring, ownership,
+cache revocation, collection handoffs and continuity policy are unchanged. Loaded Dashboard
+build: `0.2.0-mvp+r04.1`, in the existing Shift/status tooltip; header/layout/TOC unchanged.
+This is a deterministic local API-contract reproduction, not a native call trace or a
+claim that the user's client symptom is fixed.
+
+`lua5.1 tests/fontstring_continuity.lua` exercises native-compatible blank labels with
+actual Dashboard/Storage and collector callbacks, including failed closed-profession Scan,
+ordinary pending builds, invalid reads and reentry. It is synthetic evidence only.
+Implementation, independent review, primary acceptance and native gates are recorded in
+[R04 run state](../../TASKS.md#r04--empty-fontstring-read-incorrectly-invalidates-continuity).
+After local acceptance, only focused ordinary-refresh dot/coherent-Concentration feedback
+is needed. No repeat screenshot/version interview, profession checks/dumps, spending,
+gear changes, installation or Git action is authorized. Native trigger/cadence/latency and
+estimate accuracy remain unknown; full native INCOMPLETE87/149 and all-rank UNVERIFIED stay.
+
+All earlier documentation below is preserved history; this narrow correction does not
+supersede R03's safety boundaries or infer native acceptance from local tests.
+
+# R03 — Verified collection-handoff continuity
+
+R03 follows the user-confirmed loaded R02 build's continuing dot/estimate flicker. It adds
+private collector transition evidence, not a general permission to ignore revisions or
+tokens. A pending build may hand off once to the existing guarded replacement path;
+at most twelve cached visible rows are independently checked against the current active
+source, generation, options and player identity. Unknown, unsigned, stale or malformed
+handoffs retain fail-closed behavior. No collection schedule, event list or timer cadence
+changes. The loaded Dashboard marker is `0.2.0-mvp+r03.1` (Shift-hover the status line).
+
+An unchanged valid projection keeps its frozen paint. A renewed successful Concentration
+observation can instead replace the **whole cell** coherently using its new observed amount
+and one estimate at the existing shared Render clock, then freeze that private display
+until a verified successor or normal publication. It never overlays old cyan on a new
+observation. At the exact observation time, zero additional gain correctly means blue-only;
+full observed capacity is green. Invalid clocks/rates and failed/unknown observations do
+not invent regeneration. The identity dot remains independently guarded.
+
+Pending rows, status, hovers, fresh-warning demotion and disabled actions/Details remain
+historical even when the replacement cell is visible. Predictions never alter saved data,
+rows, sorting or attention. All prior documentation below is preserved history; R03 narrowly
+supersedes the old changed-observation blanking rule, not its safety boundaries.
+Current implementation/review/primary/native gates are recorded in
+[R03 run state](../../TASKS.md#r03--collection-handoff-continuity-follow-up).
+Additional local runner: `lua5.1 tests/collection_continuity.lua` uses actual production
+collection callbacks with synthetic APIs/widgets, not native API/order/latency proof.
+
+Only after local acceptance, observe ordinary dot/cell continuity and report the result or
+any error; a truthful zero-gain blue-only renewal is not itself a missing-cyan failure.
+No repeated loaded-R02 marker check, profession checks/dumps, spending, gear changes or full
+native suite timing chase. Native trigger/frequency/latency and estimate accuracy remain
+unknown; full native **INCOMPLETE87/149** and all-rank **UNVERIFIED** are unchanged.
+
+# R02 — Guarded refresh continuity
+
+Ordinary incremental refreshes may preserve the **last successfully painted** current-player
+dot and approximate Concentration segment/label on the twelve visible widgets. This is a
+private, frozen display-only exception to older unconditional retained=observed-only wording
+below, not a live read or a fresh observation. Current validation, independent review and
+primary/native acceptance are separate gates in the
+[R02 run state](../../TASKS.md#r02--safe-refresh-continuity-for-estimate-and-current-player-dot).
+
+The dot requires unchanged current GUID, options/source and the same supported active
+generation. The estimate additionally requires exactly unchanged successful Concentration
+observation/time/currency/amount/cap/rate provenance. A new Concentration observation can
+remove the old estimate while the same-generation identity dot remains. Publication paints
+the replacement normally. A backward/invalid estimate clock drops the projection without
+removing an otherwise valid identity dot; rejected cache estimates cannot revive before a
+successful normal paint. Pending values are not recalculated, saved, sorted or filtered
+as predictions. Pending status, historical hovers, disabled actions/Details and fresh-warning
+demotion remain in effect.
+
+Changed filters/View/order/GUID, invalid/detached source, removed/archived/replaced rows,
+hidden/combat/unknown safety, missing completed paint, explicit cancellation, generic
+retention or failures do not borrow old decorations. Reused/scrolled widgets without a
+matching cached paint fall back safely. The ready 30-second estimate repaint and scrolling
+cadence are unchanged. Synthetic callback tests do not establish the native trigger,
+refresh frequency, latency or measured offline estimate accuracy.
+
+# P03 — Profession N/A, gathering colours, Deftness and enchant warnings
+
+The accepted eight-profession crafting dashboard is preserved. P01 adds Herbalism,
+Mining, Skinning, Cooking and Fishing registry/collection/display support, not blanket
+native acceptance of all new fields. Implementation/local fixtures, independent review,
+primary acceptance and user-run native evidence are separate gates; see current
+[P03 run state](../../TASKS.md#p03--profession-na-colours-deftness-and-gathering-enchant-warnings).
+
+**P02 locally accepted2026-11-19:** independent static review PASS/no findings plus
+separately attributed PRIMARY full local suites/preservation PASS. Independent execution
+remains NOT RUN after shell denial. [Review and limits](expansion-p02-review.md).
+P03 implements the four approved follow-ups below, now focused-user-confirmed. Current
+validation/acceptance is in TASKS; broader unreported new-profession native checks remain
+partial. No repeat captures or accepted feature checks are needed.
+
+- Own learned primary2 plus Fishing/Cooking roster presence is guarded; missing reads
+  never prove unlearning or automatically retire snapshots. New rows require usable
+  observed Midnight skill/cap and coherent own ready profession context.
+- `—` means **confirmed Not applicable**, never unknown/zero: all five new Concentration
+  fields; Cooking/Fishing Moxie, Knowledge and Unspent KP; Cooking accessory2; Fishing accessories.
+  No numeric sort key, estimates or field-specific attention comes from those cells.
+  Cooking/Fishing nonmax Skill still matches **Skill below max**.
+- Cooking uses Tool26/accessory27; Fishing uses **rod28 only**, even if29/30 are returned.
+  Fishing hats in regular Head are not profession gear. Unmapped/absent applicable roles
+  remain unknown, not confirmed empty. Reused N/A cells clear old item decoration/links.
+- P02 activates gathering Moxie3260/3264/3265, native Knowledge spend3778/3784/3889 and
+  independent observed Unspent KP. Finesse/Perception intrinsic Tool keys provide F/P
+  letters through the existing enchant-neutral query; raw totals/enchant metadata stay
+  separate. P03 adds guarded Deftness recognition/D letter from the evidenced raw key.
+  Its screenshot does not separately prove a native enchant-neutral query result or build.
+  Ordinary own ready, unstaged scans use existing
+  guarded native-rank reconciliation, not verified future/all-rank costs. Failed reads
+  retain coherent values and independent times. Cooking/Fishing Moxie history is masked
+  read-only until an ordinary successful own N/A scan supersedes that active field.
+- Gathering Knowledge bars use the observed native profession/tab IDs for blue/green/orange
+  identity, independent of tree position or localized name; unknown IDs remain neutral.
+- Herbalism/Mining/Skinning Missing-enchant attention now uses existing confirmed ready-Tool
+  absence and freshness rules; unknown/loading/absent Tools do not invent missing enchants.
+  Retained absence is last-observed, not fresh proof; archived rows have no attention.
+  Cooking/Fishing warning eligibility remains **pending**, not enabled or confirmed N/A,
+  even when a Tool's actual observed enchant state is displayed. No new enchant IDs/amounts.
+- Moxie reported max0 is not a usable cap: show actual balance, never clamp to0 or show
+  balance/0. Saved base Skill/cap and modifier stay separate, including Skinning105/105
+  and modifier40; no universal100cap or sample-character balance defaults.
+- Normal valid gear hovers stay native/third-party-only; N/A fallback is concise. Shift
+  retains provenance and masked historical diagnostics. No layout/control redesign,
+  storage reset/migration, offline collection or forced old-profession rescan is needed.
+
+## Focused R02 normal use after local acceptance
+
+1. During ordinary dashboard use, with a current-character crafting row and an already
+   valid cyan estimate visible, observe whether the dot/estimate unnecessarily disappear
+   and return across an ordinary refresh. Report the visible result and any error; no
+   spending, gear changes, forced rescan or timing chase is requested.
+2. Pending rows remain last-observed/noninteractive, even when eligible decorations stay
+   visible. Real new observations or unsafe contexts may legitimately remove an old
+   estimate/dot. Keep snapshots; report an unavailable refresh instead of resetting data.
+3. Do not repeat accepted profession values/reports, P03 features, old crafting checks or
+   full native suites. Gathering evidence and P03's four focused behaviors are already
+   accepted. Secondary enchant-warning eligibility stays pending; `/ca knowledgecapture`
+   remains read-only evidence, not an activation switch or saved scan.
+
+Local regression runners: `lua5.1 tests/refresh_continuity.lua`,
+`lua5.1 tests/profession_completion.lua`,
+`lua5.1 tests/gathering_activation.lua` and
+`lua5.1 tests/profession_expansion.lua`, additional to the
+unchanged full legacy runner/supplements and diagnostics. Pure fixtures/mock widgets are
+not target-client API/font/timing proof. Full native suite remains **INCOMPLETE87/149**;
+all-rank costs **UNVERIFIED** and quantified offline estimate accuracy unverified.
+
+---
+
 # U15 — Concise tooltips locally accepted; focused C5 user-confirmed
 
 **Dashboard user sign-off2026-11-18:** current dashboard milestone accepted. No further
